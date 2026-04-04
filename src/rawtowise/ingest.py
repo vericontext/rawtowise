@@ -7,6 +7,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote, urlparse
 
 import httpx
 from rich.console import Console
@@ -33,9 +34,17 @@ def _extract_title_from_md(content: str) -> str:
     return "untitled"
 
 
+def _encode_url(url: str) -> str:
+    """Encode URL path segments to handle special characters like parentheses."""
+    parsed = urlparse(url)
+    encoded_path = quote(parsed.path, safe="/")
+    return parsed._replace(path=encoded_path).geturl()
+
+
 def _fetch_url_as_markdown(url: str) -> tuple[str, str]:
     """Fetch a URL and convert to markdown using Jina Reader."""
-    reader_url = f"https://r.jina.ai/{url}"
+    encoded = _encode_url(url)
+    reader_url = f"https://r.jina.ai/{encoded}"
     resp = httpx.get(reader_url, timeout=60, follow_redirects=True)
     resp.raise_for_status()
     content = resp.text
@@ -68,7 +77,7 @@ def ingest_source(source: str, project_dir: Path) -> list[Path]:
         elif source_path.is_file():
             saved.extend(_ingest_file(source_path, raw_dir))
         else:
-            console.print(f"[red]소스를 찾을 수 없습니다: {source}[/red]")
+            console.print(f"[red]Source not found: {source}[/red]")
 
     return saved
 
@@ -79,7 +88,7 @@ def _ingest_url(url: str, raw_dir: Path) -> list[Path]:
     try:
         content, title = _fetch_url_as_markdown(url)
     except Exception as e:
-        console.print(f"  [red]URL fetch 실패: {e}[/red]")
+        console.print(f"  [red]URL fetch failed: {e}[/red]")
         return []
 
     # Add source metadata header

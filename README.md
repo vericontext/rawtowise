@@ -98,6 +98,12 @@ compile:
   language: en
 ```
 
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vericontext/rawtowise/main/uninstall.sh | bash
+```
+
 ## License
 
 MIT

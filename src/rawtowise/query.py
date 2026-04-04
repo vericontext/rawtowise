@@ -90,13 +90,12 @@ def _read_wiki_articles(project_dir: Path) -> dict[str, str]:
 def _file_back_answer(
     project_dir: Path, question: str, answer: str, fmt: str
 ) -> Path | None:
-    """Save the answer back into wiki/queries/."""
+    """Save the answer back into output/queries/."""
     output_dir = project_dir / "output" / "queries"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H%M%S")
 
     # Create a slug from the question
     slug = re.sub(r"[^\w\s]", "", question.lower())
@@ -122,19 +121,19 @@ def query_wiki(
     """Query the wiki and return an answer."""
     index_content = _read_wiki_index(project_dir)
     if not index_content:
-        console.print("[yellow]wiki가 없습니다. 먼저 `rtw compile`을 실행하세요.[/yellow]")
+        console.print("[yellow]No wiki found. Run `rtw compile` first.[/yellow]")
         return ""
 
     all_articles = _read_wiki_articles(project_dir)
     if not all_articles:
-        console.print("[yellow]wiki 아티클이 없습니다.[/yellow]")
+        console.print("[yellow]No wiki articles found.[/yellow]")
         return ""
 
     lang = config.compile.language
     model = config.llm.query
 
     # Step 1: Find relevant articles
-    console.print("[dim]관련 아티클 검색 중...[/dim]")
+    console.print("[dim]Searching relevant articles...[/dim]")
     relevant_names_raw = call_llm(
         config,
         model=model,
@@ -155,13 +154,11 @@ def query_wiki(
 
     # Match to actual articles
     relevant_content_parts = []
-    matched = 0
     for cname in candidate_names:
         for aname, acontent in all_articles.items():
             # Fuzzy match: check if candidate name appears in article path
             if cname in aname or aname in cname or Path(cname).stem in aname:
                 relevant_content_parts.append(f"\n--- ARTICLE: {aname} ---\n{acontent}")
-                matched += 1
                 break
 
     # If no match found, use all articles (for small wikis)
@@ -176,7 +173,7 @@ def query_wiki(
         wiki_content = wiki_content[:150_000] + "\n[...truncated...]"
 
     # Step 2: Generate answer
-    console.print("[dim]답변 생성 중...[/dim]")
+    console.print("[dim]Generating answer...[/dim]")
     format_instruction = FORMAT_INSTRUCTIONS.get(fmt, "")
 
     answer = call_llm(
@@ -201,6 +198,6 @@ def query_wiki(
     if should_file_back:
         saved = _file_back_answer(project_dir, question, answer, fmt)
         if saved:
-            console.print(f"\n[dim]답변 저장됨: {saved.relative_to(project_dir)}[/dim]")
+            console.print(f"\n[dim]Answer saved: {saved.relative_to(project_dir)}[/dim]")
 
     return answer

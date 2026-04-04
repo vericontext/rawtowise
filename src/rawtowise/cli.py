@@ -13,7 +13,7 @@ from rawtowise.config import Config, default_yaml, load_config
 
 app = typer.Typer(
     name="rtw",
-    help="RawToWise — raw 문서를 LLM이 구조화된 위키로 컴파일합니다.",
+    help="RawToWise — compiles raw documents into a structured wiki via LLM.",
     no_args_is_help=True,
 )
 console = Console()
@@ -37,10 +37,10 @@ def _load(project: str | None) -> tuple[Path, Config]:
 
 @app.command()
 def init(
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
-    name: str = typer.Option("My Research", "--name", "-n", help="프로젝트 이름"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
+    name: str = typer.Option("My Research", "--name", "-n", help="Project name"),
 ):
-    """새 RawToWise 프로젝트를 초기화합니다."""
+    """Initialize a new RawToWise project."""
     import os
 
     project_dir = _resolve_project(project)
@@ -54,7 +54,7 @@ def init(
     if not config_path.exists():
         content = default_yaml().replace('name: "My Research"', f'name: "{name}"')
         config_path.write_text(content)
-        console.print(f"[green]✓[/green] rtw.yaml created")
+        console.print("[green]✓[/green] rtw.yaml created")
     else:
         console.print("[dim]rtw.yaml already exists[/dim]")
 
@@ -67,15 +67,20 @@ def init(
         console.print("\n[bold]API Key Setup[/bold]")
         console.print("RawToWise requires an Anthropic API key.")
         console.print("Get one at: [link]https://console.anthropic.com/settings/keys[/link]\n")
-        api_key = typer.prompt("ANTHROPIC_API_KEY (enter to skip)", default="", show_default=False)
+        api_key = typer.prompt(
+            "ANTHROPIC_API_KEY (enter to skip)",
+            default="",
+            show_default=False,
+            hide_input=True,
+        )
         if api_key.strip():
             env_path.write_text(f"ANTHROPIC_API_KEY={api_key.strip()}\n")
-            console.print(f"[green]✓[/green] Saved to .env")
+            console.print("[green]✓[/green] Saved to .env")
             console.print("[dim]Tip: .env is in .gitignore — your key stays local[/dim]")
         else:
             console.print("[dim]Skipped. Set it later: echo 'ANTHROPIC_API_KEY=sk-...' > .env[/dim]")
     else:
-        console.print(f"[green]✓[/green] API key configured")
+        console.print("[green]✓[/green] API key configured")
 
     console.print(f"\n[bold green]Project initialized![/bold green] ({project_dir})")
     console.print("\nNext steps:")
@@ -86,32 +91,32 @@ def init(
 
 @app.command()
 def ingest(
-    sources: list[str] = typer.Argument(..., help="URL, 파일 경로, 또는 디렉토리"),
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
+    sources: list[str] = typer.Argument(..., help="URL, file path, or directory"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
 ):
-    """소스를 수집하여 raw/에 저장합니다."""
+    """Ingest sources into raw/."""
     from rawtowise.ingest import ingest_source
 
     project_dir, _config = _load(project)
-    console.print(f"[bold]소스 수집 중...[/bold] ({len(sources)}개)")
+    console.print(f"[bold]Ingesting...[/bold] ({len(sources)} source(s))")
 
     total_saved = []
     for source in sources:
         saved = ingest_source(source, project_dir)
         total_saved.extend(saved)
 
-    console.print(f"\n[bold green]수집 완료![/bold green] {len(total_saved)}개 파일 저장됨")
+    console.print(f"\n[bold green]Done![/bold green] {len(total_saved)} file(s) saved")
     if total_saved:
-        console.print("\n다음: [bold]rtw compile[/bold] 로 위키를 컴파일하세요.")
+        console.print("\nNext: [bold]rtw compile[/bold] to build the wiki.")
 
 
 @app.command(name="compile")
 def compile_cmd(
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
-    full: bool = typer.Option(False, "--full", help="전체 재컴파일"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="비용 추정만"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
+    full: bool = typer.Option(False, "--full", help="Full recompile"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Cost estimate only"),
 ):
-    """raw/ 소스를 구조화된 wiki/로 컴파일합니다."""
+    """Compile raw/ sources into a structured wiki/."""
     from rawtowise.compile import compile_wiki, _read_raw_sources
 
     project_dir, config = _load(project)
@@ -121,24 +126,24 @@ def compile_cmd(
         total_chars = sum(len(v) for v in sources.values())
         est_tokens = total_chars // 3
         est_cost = (est_tokens / 1_000_000) * 3.0 + (est_tokens / 1_000_000) * 0.5 * 15.0
-        console.print(f"소스: {len(sources)}개 파일, ~{total_chars:,} 문자")
-        console.print(f"예상 토큰: ~{est_tokens:,} input")
-        console.print(f"예상 비용: ~${est_cost:.2f}")
+        console.print(f"Sources: {len(sources)} files, ~{total_chars:,} chars")
+        console.print(f"Est. tokens: ~{est_tokens:,} input")
+        console.print(f"Est. cost: ~${est_cost:.2f}")
         return
 
-    console.print(f"[bold]위키 컴파일 시작[/bold] ({'전체 재빌드' if full else '증분'})")
+    console.print(f"[bold]Compiling wiki[/bold] ({'full rebuild' if full else 'incremental'})")
     compile_wiki(project_dir, config, full=full)
 
 
 @app.command()
 def query(
-    question: str = typer.Argument(..., help="위키에 대한 질문"),
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
-    fmt: str = typer.Option("text", "--format", "-f", help="출력 형식: text, table, marp"),
-    deep: bool = typer.Option(False, "--deep", help="심층 리서치 모드"),
-    no_save: bool = typer.Option(False, "--no-save", help="답변을 파일로 저장하지 않음"),
+    question: str = typer.Argument(..., help="Question to ask the wiki"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
+    fmt: str = typer.Option("text", "--format", "-f", help="Output format: text, table, marp"),
+    deep: bool = typer.Option(False, "--deep", help="Deep research mode"),
+    no_save: bool = typer.Option(False, "--no-save", help="Don't save answer to file"),
 ):
-    """위키를 탐색하여 질문에 답합니다."""
+    """Query the wiki and get answers."""
     from rawtowise.query import query_wiki
 
     project_dir, config = _load(project)
@@ -154,13 +159,13 @@ def query(
 
 @app.command()
 def lint(
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
-    contradictions: bool = typer.Option(True, help="모순 검사"),
-    gaps: bool = typer.Option(True, help="커버리지 갭 검사"),
-    stale: bool = typer.Option(True, help="구식 정보 감지"),
-    suggest: bool = typer.Option(True, help="탐색 질문 제안"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
+    contradictions: bool = typer.Option(True, help="Check contradictions"),
+    gaps: bool = typer.Option(True, help="Check coverage gaps"),
+    stale: bool = typer.Option(True, help="Detect stale info"),
+    suggest: bool = typer.Option(True, help="Suggest questions to explore"),
 ):
-    """위키 헬스체크를 실행합니다."""
+    """Run wiki health check."""
     from rawtowise.lint import lint_wiki
 
     project_dir, config = _load(project)
@@ -175,9 +180,9 @@ def lint(
 
 @app.command()
 def stats(
-    project: str = typer.Option(None, "--project", "-p", help="프로젝트 디렉토리"),
+    project: str = typer.Option(None, "--project", "-p", help="Project directory"),
 ):
-    """위키 통계를 표시합니다."""
+    """Show wiki statistics."""
     project_dir = _resolve_project(project)
 
     raw_dir = project_dir / "raw"
@@ -197,30 +202,30 @@ def stats(
 
     query_files = list((output_dir / "queries").rglob("*.md")) if (output_dir / "queries").exists() else []
 
-    table = Table(title=f"📊 {project_dir.name} Knowledge Base")
-    table.add_column("항목", style="bold")
-    table.add_column("수치", justify="right")
+    table = Table(title=f"{project_dir.name} Knowledge Base")
+    table.add_column("Item", style="bold")
+    table.add_column("Count", justify="right")
 
-    table.add_row("소스 (raw/)", str(len(raw_files)))
-    table.add_row("위키 아티클 (wiki/)", str(len(wiki_files)))
-    table.add_row("위키 총 단어 수", f"{wiki_words:,}")
-    table.add_row("질의 결과 (output/)", str(len(query_files)))
+    table.add_row("Sources (raw/)", str(len(raw_files)))
+    table.add_row("Wiki articles (wiki/)", str(len(wiki_files)))
+    table.add_row("Wiki total words", f"{wiki_words:,}")
+    table.add_row("Query outputs (output/)", str(len(query_files)))
 
     # Compile state
     state_path = project_dir / ".rtw" / "compile-state.json"
     if state_path.exists():
         import json
         state = json.loads(state_path.read_text())
-        table.add_row("마지막 컴파일", state.get("last_compile", "N/A")[:19])
+        table.add_row("Last compiled", state.get("last_compile", "N/A")[:19])
     else:
-        table.add_row("마지막 컴파일", "미실행")
+        table.add_row("Last compiled", "never")
 
     console.print(table)
 
 
 @app.command()
 def version():
-    """버전 정보를 표시합니다."""
+    """Show version info."""
     console.print(f"RawToWise v{__version__}")
 
 

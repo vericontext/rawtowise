@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,7 +51,7 @@ Return a JSON object with this structure:
 }}
 
 Extract up to {max_concepts} concepts. Focus on the most important and cross-referenced ones.
-Return ONLY valid JSON, no markdown fences.
+Return ONLY valid JSON, no markdown fences, no commentary.
 """
 
 PROMPT_WRITE_ARTICLE = """\
@@ -163,17 +164,42 @@ def _truncate_sources(sources: dict[str, str], max_chars: int = 150_000) -> str:
     return "\n".join(parts)
 
 
+def _extract_json(text: str) -> dict | None:
+    """Extract JSON from LLM response, handling markdown fences and preamble."""
+    # Strip markdown fences
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+
+    # Try direct parse
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON object in the text
+    brace_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     """Compile raw sources into a structured wiki."""
     sources = _read_raw_sources(project_dir)
     if not sources:
-        console.print("[yellow]raw/ 디렉토리에 소스가 없습니다. `rtw ingest`로 소스를 추가하세요.[/yellow]")
+        console.print("[yellow]No sources in raw/. Run `rtw ingest` to add sources.[/yellow]")
         return
 
     # Check for incremental
     prev_state = _load_compile_state(project_dir)
     if not full and set(sources.keys()) == set(prev_state.get("compiled_files", [])):
-        console.print("[yellow]변경된 소스가 없습니다. --full 옵션으로 전체 재컴파일할 수 있습니다.[/yellow]")
+        console.print("[yellow]No new sources. Use --full to force a full recompile.[/yellow]")
         return
 
     wiki_dir = project_dir / "wiki"
@@ -184,7 +210,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     sources_text = _truncate_sources(sources)
 
     # Step 1: Extract concepts
-    console.print("\n[bold]1/4[/bold] 개념 추출 중...")
+    console.print("\n[bold]1/4[/bold] Extracting concepts...")
     concepts_raw = call_llm(
         config,
         system=SYSTEM_COMPILE.format(language=lang),
@@ -196,28 +222,33 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         max_tokens=4096,
     )
 
-    try:
-        # Try to parse JSON, handling potential markdown fences
-        cleaned = concepts_raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:])
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-        concepts_data = json.loads(cleaned)
-        concepts = concepts_data.get("concepts", [])
-    except json.JSONDecodeError:
-        console.print("[red]개념 추출 JSON 파싱 실패. 재시도합니다...[/red]")
-        # Retry with stricter prompt
-        concepts = []
+    concepts_data = _extract_json(concepts_raw)
+    concepts = concepts_data.get("concepts", []) if concepts_data else []
 
     if not concepts:
-        console.print("[red]개념을 추출하지 못했습니다.[/red]")
+        # Retry once with explicit instruction
+        console.print("[yellow]  Retrying concept extraction...[/yellow]")
+        concepts_raw = call_llm(
+            config,
+            system="You are a JSON generator. Return ONLY valid JSON, nothing else.",
+            user=PROMPT_EXTRACT_CONCEPTS.format(
+                project_name=config.name,
+                sources_text=sources_text,
+                max_concepts=config.compile.max_concepts,
+            ),
+            max_tokens=4096,
+        )
+        concepts_data = _extract_json(concepts_raw)
+        concepts = concepts_data.get("concepts", []) if concepts_data else []
+
+    if not concepts:
+        console.print("[red]Failed to extract concepts.[/red]")
         return
 
-    console.print(f"  [green]✓[/green] {len(concepts)}개 개념 추출됨")
+    console.print(f"  [green]✓[/green] {len(concepts)} concepts extracted")
 
     # Step 2: Write concept articles
-    console.print(f"\n[bold]2/4[/bold] 아티클 생성 중 ({len(concepts)}개)...")
+    console.print(f"\n[bold]2/4[/bold] Generating articles ({len(concepts)})...")
     articles_summary = []
 
     for i, concept in enumerate(concepts):
@@ -259,10 +290,10 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         article_path.write_text(article_content, encoding="utf-8")
         articles_summary.append(f"- [[{cid}]] ({title}): {desc}")
 
-    console.print(f"  [green]✓[/green] {len(concepts)}개 아티클 생성 완료")
+    console.print(f"  [green]✓[/green] {len(concepts)} articles generated")
 
     # Step 3: Write _index.md
-    console.print("\n[bold]3/4[/bold] 인덱스 생성 중...")
+    console.print("\n[bold]3/4[/bold] Generating index...")
     index_content = call_llm(
         config,
         system=SYSTEM_COMPILE.format(language=lang),
@@ -274,10 +305,10 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         max_tokens=4096,
     )
     (wiki_dir / "_index.md").write_text(index_content, encoding="utf-8")
-    console.print("  [green]✓[/green] _index.md 생성")
+    console.print("  [green]✓[/green] _index.md created")
 
     # Step 4: Write _sources.md
-    console.print("\n[bold]4/4[/bold] 소스 카탈로그 생성 중...")
+    console.print("\n[bold]4/4[/bold] Generating source catalog...")
     sources_list_text = "\n".join(
         f"- {name} ({len(content)} chars)" for name, content in sources.items()
     )
@@ -291,8 +322,8 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         max_tokens=4096,
     )
     (wiki_dir / "_sources.md").write_text(sources_content, encoding="utf-8")
-    console.print("  [green]✓[/green] _sources.md 생성")
+    console.print("  [green]✓[/green] _sources.md created")
 
     # Save state
     _save_compile_state(project_dir, sources)
-    console.print(f"\n[bold green]컴파일 완료![/bold green] wiki/ 에 {len(concepts) + 2}개 파일 생성됨")
+    console.print(f"\n[bold green]Compile complete![/bold green] {len(concepts) + 2} files in wiki/")

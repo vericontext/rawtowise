@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,7 +57,7 @@ Output as JSON:
   "suggested_questions": ["question1", "question2"]
 }}
 
-Return ONLY valid JSON.
+Return ONLY valid JSON, no markdown fences, no commentary.
 """
 
 CHECK_TYPES = {
@@ -65,6 +66,25 @@ CHECK_TYPES = {
     "stale": "3. STALE INFORMATION: Claims that may be outdated or that lack source citations.",
     "suggest": "4. EXPLORATION SUGGESTIONS: Interesting questions to investigate next, connections worth exploring.",
 }
+
+
+def _extract_json(text: str) -> dict | None:
+    """Extract JSON from LLM response."""
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    brace_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group())
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 def lint_wiki(
@@ -78,7 +98,7 @@ def lint_wiki(
     """Run wiki health check and return report."""
     wiki_dir = project_dir / "wiki"
     if not wiki_dir.exists():
-        console.print("[yellow]wiki가 없습니다. 먼저 `rtw compile`을 실행하세요.[/yellow]")
+        console.print("[yellow]No wiki found. Run `rtw compile` first.[/yellow]")
         return None
 
     # Read all wiki content
@@ -90,7 +110,7 @@ def lint_wiki(
 
     wiki_content = "\n".join(wiki_parts)
     if not wiki_content.strip():
-        console.print("[yellow]wiki가 비어있습니다.[/yellow]")
+        console.print("[yellow]Wiki is empty.[/yellow]")
         return None
 
     # Build checks list
@@ -106,7 +126,7 @@ def lint_wiki(
 
     lang = config.compile.language
 
-    console.print("[bold]위키 헬스체크 실행 중...[/bold]")
+    console.print("[bold]Running wiki health check...[/bold]")
 
     result_raw = call_llm(
         config,
@@ -120,15 +140,9 @@ def lint_wiki(
     )
 
     # Parse JSON
-    try:
-        cleaned = result_raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:])
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-        report = json.loads(cleaned)
-    except json.JSONDecodeError:
-        console.print("[red]린트 결과 파싱 실패[/red]")
+    report = _extract_json(result_raw)
+    if not report:
+        console.print("[red]Failed to parse lint result[/red]")
         console.print(result_raw)
         return None
 
@@ -142,7 +156,7 @@ def lint_wiki(
 
     issues = report.get("issues", [])
     if issues:
-        console.print(f"\n[bold]발견된 이슈: {len(issues)}개[/bold]")
+        console.print(f"\n[bold]Issues found: {len(issues)}[/bold]")
         for issue in issues:
             sev = issue.get("severity", "?")
             sev_color = {"high": "red", "medium": "yellow", "low": "dim"}.get(sev, "white")
@@ -154,7 +168,7 @@ def lint_wiki(
 
     suggestions = report.get("suggested_questions", [])
     if suggestions:
-        console.print("\n[bold]탐색 제안:[/bold]")
+        console.print("\n[bold]Suggested explorations:[/bold]")
         for q in suggestions:
             console.print(f"  ? {q}")
 
