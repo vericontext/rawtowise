@@ -320,9 +320,12 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         console.print(f"  [green]✓[/green] {title}")
         return cid, title, desc, content
 
-    results = asyncio.run(asyncio.gather(
-        *[_generate_article(i, c) for i, c in enumerate(concepts)]
-    ))
+    async def _generate_all_articles():
+        return await asyncio.gather(
+            *[_generate_article(i, c) for i, c in enumerate(concepts)]
+        )
+
+    results = asyncio.run(_generate_all_articles())
 
     articles_summary = []
     for cid, title, desc, content in results:
