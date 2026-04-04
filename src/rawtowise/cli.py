@@ -41,6 +41,8 @@ def init(
     name: str = typer.Option("My Research", "--name", "-n", help="프로젝트 이름"),
 ):
     """새 RawToWise 프로젝트를 초기화합니다."""
+    import os
+
     project_dir = _resolve_project(project)
 
     # Create directories
@@ -52,15 +54,34 @@ def init(
     if not config_path.exists():
         content = default_yaml().replace('name: "My Research"', f'name: "{name}"')
         config_path.write_text(content)
-        console.print(f"[green]✓[/green] rtw.yaml 생성됨")
+        console.print(f"[green]✓[/green] rtw.yaml created")
     else:
-        console.print("[dim]rtw.yaml 이미 존재합니다[/dim]")
+        console.print("[dim]rtw.yaml already exists[/dim]")
 
-    console.print(f"\n[bold green]프로젝트 초기화 완료![/bold green] ({project_dir})")
-    console.print("\n다음 단계:")
-    console.print("  1. [bold]rtw ingest <URL 또는 파일>[/bold] — 소스 수집")
-    console.print("  2. [bold]rtw compile[/bold] — 위키 컴파일")
-    console.print("  3. [bold]rtw query \"질문\"[/bold] — 위키에 질문")
+    # API key setup
+    env_path = project_dir / ".env"
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_env_file = env_path.exists() and "ANTHROPIC_API_KEY" in env_path.read_text()
+
+    if not has_key and not has_env_file:
+        console.print("\n[bold]API Key Setup[/bold]")
+        console.print("RawToWise requires an Anthropic API key.")
+        console.print("Get one at: [link]https://console.anthropic.com/settings/keys[/link]\n")
+        api_key = typer.prompt("ANTHROPIC_API_KEY (enter to skip)", default="", show_default=False)
+        if api_key.strip():
+            env_path.write_text(f"ANTHROPIC_API_KEY={api_key.strip()}\n")
+            console.print(f"[green]✓[/green] Saved to .env")
+            console.print("[dim]Tip: .env is in .gitignore — your key stays local[/dim]")
+        else:
+            console.print("[dim]Skipped. Set it later: echo 'ANTHROPIC_API_KEY=sk-...' > .env[/dim]")
+    else:
+        console.print(f"[green]✓[/green] API key configured")
+
+    console.print(f"\n[bold green]Project initialized![/bold green] ({project_dir})")
+    console.print("\nNext steps:")
+    console.print("  1. [bold]rtw ingest <URL or file>[/bold] — collect sources")
+    console.print("  2. [bold]rtw compile[/bold] — compile wiki")
+    console.print("  3. [bold]rtw query \"question\"[/bold] — ask the wiki")
 
 
 @app.command()

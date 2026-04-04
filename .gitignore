@@ -8,6 +8,7 @@ raw/
 wiki/
 output/
 *.egg-link
+.env
 .claude/settings.local.json
 IDEA.md
 llm-wiki.md
