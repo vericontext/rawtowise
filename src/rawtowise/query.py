@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from rawtowise.config import Config
-from rawtowise.llm import call_llm
+from rawtowise.llm import call_llm, stream_llm
 
 console = Console()
 
@@ -172,11 +172,12 @@ def query_wiki(
     if len(wiki_content) > 150_000:
         wiki_content = wiki_content[:150_000] + "\n[...truncated...]"
 
-    # Step 2: Generate answer
-    console.print("[dim]Generating answer...[/dim]")
+    # Step 2: Generate answer (streamed)
+    console.print("[dim]Generating answer...[/dim]\n")
     format_instruction = FORMAT_INSTRUCTIONS.get(fmt, "")
 
-    answer = call_llm(
+    chunks: list[str] = []
+    for chunk in stream_llm(
         config,
         model=model,
         system=SYSTEM_QUERY.format(language=lang),
@@ -187,11 +188,12 @@ def query_wiki(
             format_instruction=format_instruction,
         ),
         max_tokens=8192 if deep else 4096,
-    )
+    ):
+        print(chunk, end="", flush=True)
+        chunks.append(chunk)
 
-    # Display
-    console.print()
-    console.print(Markdown(answer))
+    answer = "".join(chunks)
+    print()  # newline after stream
 
     # File back
     should_file_back = file_back if file_back is not None else config.file_back

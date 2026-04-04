@@ -106,7 +106,7 @@ llm:
 compile:
   strategy: incremental
   max_concepts: 200
-  language: ko
+  language: en
   backlinks: true
   summaries: true
 
