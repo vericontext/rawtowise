@@ -39,8 +39,9 @@ Requires `ANTHROPIC_API_KEY` environment variable.
 # Initialize a project
 rtw init --name "AI Research"
 
-# Ingest sources
+# Ingest sources (quote URLs with special chars like parentheses)
 rtw ingest https://example.com/article
+rtw ingest "https://en.wikipedia.org/wiki/Transformer_(deep_learning)"
 rtw ingest paper.pdf
 rtw ingest ./my-articles/
 

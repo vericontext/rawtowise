@@ -25,7 +25,7 @@ rtw init --name "Test KB"
 # Step 2 — Ingest a few sources
 rtw ingest https://en.wikipedia.org/wiki/Retrieval-augmented_generation
 rtw ingest https://en.wikipedia.org/wiki/Large_language_model
-rtw ingest https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)
+rtw ingest "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)"
 rtw ingest https://en.wikipedia.org/wiki/Word_embedding
 rtw ingest https://en.wikipedia.org/wiki/Prompt_engineering
 
@@ -61,7 +61,7 @@ rtw stats
 
 ```bash
 # Add another source after initial compile
-rtw ingest https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)
+rtw ingest "https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)"
 
 # Should only process the new source
 rtw compile

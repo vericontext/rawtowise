@@ -224,13 +224,22 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
 
     # Check for incremental
     prev_state = _load_compile_state(project_dir)
-    if not full and set(sources.keys()) == set(prev_state.get("compiled_files", [])):
+    prev_files = set(prev_state.get("compiled_files", []))
+    curr_files = set(sources.keys())
+    new_files = curr_files - prev_files
+
+    if not full and not new_files:
         console.print("[yellow]No new sources. Use --full to force a full recompile.[/yellow]")
         return
 
     wiki_dir = project_dir / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     (wiki_dir / "concepts").mkdir(exist_ok=True)
+
+    if full or not prev_files:
+        console.print(f"  [dim]Full compile: {len(sources)} sources[/dim]")
+    else:
+        console.print(f"  [dim]New sources: {len(new_files)} (total: {len(sources)})[/dim]")
 
     lang = config.compile.language
     sources_text = _truncate_sources(sources)
@@ -284,15 +293,25 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
 
     console.print(f"  [green]✓[/green] {len(concepts)} concepts extracted")
 
-    # Step 2: Write concept articles (parallel)
-    console.print(f"\n[bold]2/4[/bold] Generating articles ({len(concepts)}) in parallel...")
+    # Step 2: Write concept articles (parallel with progress)
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 
     wiki_index_text = "\n".join(
         f"- [[{c.get('id', '')}]] — {c.get('description', '')}"
         for c in concepts
     )
 
-    async def _generate_article(i: int, concept: dict) -> tuple[str, str, str]:
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]2/4[/bold] Generating articles"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("{task.fields[current]}"),
+        console=console,
+    )
+    task_id = progress.add_task("articles", total=len(concepts), current="")
+
+    async def _generate_article(i: int, concept: dict) -> tuple[str, str, str, str]:
         cid = concept.get("id", f"concept-{i}")
         title = concept.get("title", cid)
         desc = concept.get("description", "")
@@ -317,7 +336,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             ),
             max_tokens=4096,
         )
-        console.print(f"  [green]✓[/green] {title}")
+        progress.update(task_id, advance=1, current=title)
         return cid, title, desc, content
 
     async def _generate_all_articles():
@@ -325,14 +344,15 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             *[_generate_article(i, c) for i, c in enumerate(concepts)]
         )
 
-    results = asyncio.run(_generate_all_articles())
+    with progress:
+        results = asyncio.run(_generate_all_articles())
 
     articles_summary = []
     for cid, title, desc, content in results:
         (wiki_dir / "concepts" / f"{cid}.md").write_text(content, encoding="utf-8")
         articles_summary.append(f"- [[{cid}]] ({title}): {desc}")
 
-    console.print(f"  {len(concepts)} articles generated")
+    console.print(f"  [green]✓[/green] {len(concepts)} articles generated")
 
     # Step 3+4: Generate index and source catalog in parallel
     console.print("\n[bold]3/4[/bold] Generating index + source catalog...")
