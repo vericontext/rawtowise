@@ -43,31 +43,23 @@ else
   fail "Python >= $MIN_PYTHON is required. Install it from https://python.org"
 fi
 
-# 2. Choose install method: pipx > uv > pip
-if command -v pipx &>/dev/null; then
-  INSTALLER="pipx"
-  INSTALL_CMD="pipx install git+${REPO}"
-  UPGRADE_CMD="pipx upgrade rawtowise"
-elif command -v uv &>/dev/null; then
+# 2. Choose install method: uv > pipx > pip
+if command -v uv &>/dev/null; then
   INSTALLER="uv"
-  INSTALL_CMD="uv tool install git+${REPO}"
-  UPGRADE_CMD="uv tool upgrade rawtowise"
+  INSTALL_CMD="uv tool install --force git+${REPO}"
+elif command -v pipx &>/dev/null; then
+  INSTALLER="pipx"
+  INSTALL_CMD="pipx install --force git+${REPO}"
 else
   INSTALLER="pip"
-  INSTALL_CMD="$PYTHON -m pip install --user git+${REPO}"
-  UPGRADE_CMD="$PYTHON -m pip install --user --upgrade git+${REPO}"
+  INSTALL_CMD="$PYTHON -m pip install --user --force-reinstall git+${REPO}"
 fi
 
 ok "Using $INSTALLER"
 
-# 3. Check if already installed → upgrade
-if command -v rtw &>/dev/null; then
-  info "Existing installation found, upgrading..."
-  eval "$UPGRADE_CMD"
-else
-  info "Installing RawToWise..."
-  eval "$INSTALL_CMD"
-fi
+# 3. Install (--force handles both fresh install and upgrade)
+info "Installing RawToWise..."
+eval "$INSTALL_CMD"
 
 # 4. Verify
 if command -v rtw &>/dev/null; then
