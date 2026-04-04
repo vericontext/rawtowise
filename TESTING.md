@@ -1,78 +1,105 @@
 # Testing Guide
 
-End-to-end test from a clean directory to verify the full user flow.
+End-to-end walkthrough to verify the full `ingest → compile → query → lint` cycle.
 
-## Setup
+> Run these in a **separate directory** (not inside the project repo) to simulate a real user install.
+
+---
+
+## 1. Setup
 
 ```bash
-# 1. Create a test directory (outside the project)
-mkdir -p ~/dev/personal/playground/rtw-test
-cd ~/dev/personal/playground/rtw-test
+mkdir -p ~/playground/rtw-test && cd ~/playground/rtw-test
 
-# 2. Install (simulates real user install)
+# Install
 curl -fsSL https://raw.githubusercontent.com/vericontext/rawtowise/main/install.sh | bash
 
-# 3. Verify
+# Verify
 rtw version
 ```
 
-## Test: Full Cycle
+## 2. Initialize
 
 ```bash
-# Step 1 — Init (will prompt for API key if not set)
 rtw init --name "Test KB"
+# → Creates rtw.yaml, directories, prompts for API key
+```
 
-# Step 2 — Ingest a few sources
+## 3. Ingest Sources
+
+```bash
 rtw ingest https://en.wikipedia.org/wiki/Retrieval-augmented_generation
 rtw ingest https://en.wikipedia.org/wiki/Large_language_model
 rtw ingest "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)"
 rtw ingest https://en.wikipedia.org/wiki/Word_embedding
 rtw ingest https://en.wikipedia.org/wiki/Prompt_engineering
-
-# Step 3 — Check what got collected
-ls raw/articles/
-rtw stats
-
-# Step 4 — Dry run (see cost estimate before compiling)
-rtw compile --dry-run
-
-# Step 5 — Compile
-rtw compile
-
-# Step 6 — Inspect the generated wiki
-ls wiki/concepts/
-cat wiki/_index.md
-
-# Step 7 — Query
-rtw query "What is the relationship between RAG and LLMs?"
-rtw query "Compare RAG vs fine-tuning" --format table
-
-# Step 8 — Check query output was saved
-ls output/queries/
-
-# Step 9 — Lint
-rtw lint
-
-# Step 10 — Stats again (should show growth)
-rtw stats
 ```
 
-## Test: Incremental Compile
+> **Note:** Quote URLs containing parentheses to avoid shell parsing errors.
 
 ```bash
-# Add another source after initial compile
+# Verify
+ls raw/articles/
+rtw stats
+```
+
+## 4. Compile
+
+```bash
+# Preview cost
+rtw compile --dry-run
+
+# Compile (parallel article generation, ~30s for 5 sources)
+rtw compile
+```
+
+```bash
+# Verify
+ls wiki/concepts/
+cat wiki/_index.md
+```
+
+## 5. Query
+
+```bash
+# Answers stream in real-time
+rtw query "What is the relationship between RAG and LLMs?"
+
+# Table format
+rtw query "Compare RAG vs fine-tuning" --format table
+
+# Check saved output
+ls output/queries/
+```
+
+## 6. Lint
+
+```bash
+rtw lint
+# → Health score, contradictions, gaps, suggested questions
+```
+
+## 7. Incremental Compile
+
+```bash
+# Add another source
 rtw ingest "https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)"
 
-# Should only process the new source
+# Recompile (detects new source automatically)
 rtw compile
 
-# Full rebuild
+# Or force full rebuild
 rtw compile --full
 ```
+
+## 8. View in Obsidian / VSCode
+
+Open `wiki/` folder as:
+- **Obsidian vault** — graph view shows concept connections
+- **VSCode workspace** with [Foam](https://marketplace.visualstudio.com/items?itemName=foam.foam-vscode) extension
 
 ## Cleanup
 
 ```bash
-# Remove test directory when done
-rm -rf ~/dev/personal/playground/rtw-test
+rm -rf ~/playground/rtw-test
 ```
