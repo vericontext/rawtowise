@@ -51,6 +51,7 @@ Return a JSON object with this structure:
 }}
 
 Extract up to {max_concepts} concepts. Focus on the most important and cross-referenced ones.
+Keep descriptions SHORT (under 15 words each).
 Return ONLY valid JSON, no markdown fences, no commentary.
 """
 
@@ -174,7 +175,7 @@ def _truncate_sources(
 
 
 def _extract_json(text: str) -> dict | None:
-    """Extract JSON from LLM response, handling markdown fences and preamble."""
+    """Extract JSON from LLM response, handling markdown fences, preamble, and truncation."""
     # Strip markdown fences
     cleaned = text.strip()
     fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
@@ -194,6 +195,20 @@ def _extract_json(text: str) -> dict | None:
             return json.loads(brace_match.group())
         except json.JSONDecodeError:
             pass
+
+    # Try to repair truncated JSON (e.g., output cut off by max_tokens)
+    # Find the last complete object in an array and close the structure
+    brace_start = cleaned.find("{")
+    if brace_start >= 0:
+        fragment = cleaned[brace_start:]
+        # Find last complete object: look for },\n which precedes the next (incomplete) entry
+        last_complete = fragment.rfind("},")
+        if last_complete > 0:
+            repaired = fragment[:last_complete + 1] + "]}"
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
 
     return None
 
@@ -228,7 +243,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             sources_text=sources_text,
             max_concepts=config.compile.max_concepts,
         ),
-        max_tokens=4096,
+        max_tokens=16384,
     )
 
     concepts_data = _extract_json(concepts_raw)
@@ -245,7 +260,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
                 sources_text=sources_text,
                 max_concepts=config.compile.max_concepts,
             ),
-            max_tokens=4096,
+            max_tokens=16384,
         )
         concepts_data = _extract_json(concepts_raw)
         concepts = concepts_data.get("concepts", []) if concepts_data else []
