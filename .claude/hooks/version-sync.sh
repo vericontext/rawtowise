@@ -8,15 +8,29 @@ set -euo pipefail
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
-PYPROJECT="$PROJECT_DIR/pyproject.toml"
-INIT_PY="$PROJECT_DIR/src/rawtowise/__init__.py"
-
 # Only trigger on version-related files
 case "$FILE_PATH" in
   *pyproject.toml|*__init__.py) ;;
   *) exit 0 ;;
 esac
+
+# Derive project dir from the edited file path
+case "$FILE_PATH" in
+  *pyproject.toml)
+    PROJECT_DIR=$(dirname "$FILE_PATH")
+    ;;
+  *__init__.py)
+    # src/rawtowise/__init__.py → go up 3 levels
+    PROJECT_DIR=$(cd "$(dirname "$FILE_PATH")/../../.." && pwd)
+    ;;
+esac
+
+PYPROJECT="$PROJECT_DIR/pyproject.toml"
+INIT_PY="$PROJECT_DIR/src/rawtowise/__init__.py"
+
+# Sanity check
+[ -f "$PYPROJECT" ] || exit 0
+[ -f "$INIT_PY" ] || exit 0
 
 # Extract versions
 TOML_VER=$(grep -m1 '^version' "$PYPROJECT" | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || echo "")
@@ -27,7 +41,6 @@ if [ -z "$TOML_VER" ] || [ -z "$INIT_VER" ]; then
 fi
 
 if [ "$TOML_VER" != "$INIT_VER" ]; then
-  # Determine which was just edited → use that as source of truth
   case "$FILE_PATH" in
     *pyproject.toml)
       sed -i '' "s/__version__ = \".*\"/__version__ = \"$TOML_VER\"/" "$INIT_PY"

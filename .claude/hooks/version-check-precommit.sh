@@ -13,9 +13,15 @@ case "$COMMAND" in
   *) exit 0 ;;
 esac
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
+# Use cwd from hook input, fall back to CLAUDE_PROJECT_DIR or .
+PROJECT_DIR=$(echo "$INPUT" | jq -r '.cwd // empty')
+PROJECT_DIR="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-.}}"
+
 PYPROJECT="$PROJECT_DIR/pyproject.toml"
 INIT_PY="$PROJECT_DIR/src/rawtowise/__init__.py"
+
+[ -f "$PYPROJECT" ] || exit 0
+[ -f "$INIT_PY" ] || exit 0
 
 TOML_VER=$(grep -m1 '^version' "$PYPROJECT" | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || echo "")
 INIT_VER=$(grep -m1 '__version__' "$INIT_PY" | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || echo "")

@@ -88,8 +88,8 @@ version: 1
 name: "My Research"
 
 llm:
-  compile: claude-sonnet-4-20250514
-  query: claude-sonnet-4-20250514
+  compile: claude-sonnet-4-6
+  query: claude-sonnet-4-6
   lint: claude-haiku-4-5-20251001
 
 compile:
