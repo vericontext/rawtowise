@@ -13,6 +13,8 @@
 
 ---
 
+https://github.com/user-attachments/assets/1ba77c2f-561e-4ba9-b683-d530af7b2c40
+
 ```
 raw/ (papers, articles, URLs)
   → rtw compile → wiki/ (structured .md with backlinks)
@@ -20,7 +22,7 @@ raw/ (papers, articles, URLs)
                     → rtw lint  → detect contradictions, fill gaps
 ```
 
-Inspired by [Andrej Karpathy's LLM knowledge base workflow](https://x.com/karpathy). Turn his "hacky collection of scripts" into a real tool.
+Inspired by [Andrej Karpathy's LLM knowledge base workflow](https://x.com/karpathy/status/2039805659525644595). Turn his "hacky collection of scripts" into a real tool.
 
 ## Why RawToWise?
 
