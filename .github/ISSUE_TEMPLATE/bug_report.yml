@@ -1,0 +1,43 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands or steps to reproduce the issue.
+      placeholder: |
+        1. rtw ingest https://...
+        2. rtw compile
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Paste the full error traceback if available.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: RawToWise version
+      description: Output of `rtw version`
+  - type: input
+    id: os
+    attributes:
+      label: OS / Python version
+      placeholder: "macOS 15.4 / Python 3.12"
