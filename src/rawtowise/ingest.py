@@ -101,6 +101,8 @@ def _clean_web_markdown(content: str) -> str:
         if re.match(r"^\s*\[+\s*edit\s*\]", line):
             continue
         line = re.sub(r"\s*\[+\s*edit\s*\]+\s*(\([^)]*\))?\s*\]?", "", line)
+        # 7. Remove footnote references like [1], [23], [175]
+        line = re.sub(r"\[(\d+)\]", "", line)
         cleaned.append(line)
 
     result = "\n".join(cleaned)
