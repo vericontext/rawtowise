@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 from rich.console import Console
 
 from rawtowise.config import Config
-from rawtowise.llm import call_llm
+from rawtowise.llm import call_llm, call_llm_async
 
 console = Console()
 
@@ -283,33 +284,28 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
 
     console.print(f"  [green]✓[/green] {len(concepts)} concepts extracted")
 
-    # Step 2: Write concept articles
-    console.print(f"\n[bold]2/4[/bold] Generating articles ({len(concepts)})...")
-    articles_summary = []
+    # Step 2: Write concept articles (parallel)
+    console.print(f"\n[bold]2/4[/bold] Generating articles ({len(concepts)}) in parallel...")
 
-    for i, concept in enumerate(concepts):
+    wiki_index_text = "\n".join(
+        f"- [[{c.get('id', '')}]] — {c.get('description', '')}"
+        for c in concepts
+    )
+
+    async def _generate_article(i: int, concept: dict) -> tuple[str, str, str]:
         cid = concept.get("id", f"concept-{i}")
         title = concept.get("title", cid)
         desc = concept.get("description", "")
         concept_sources = concept.get("sources", [])
 
-        console.print(f"  [{i+1}/{len(concepts)}] {title}...")
-
-        # Gather relevant source texts
         relevant = {}
         for sname in concept_sources:
             if sname in sources:
                 relevant[sname] = sources[sname]
-        # If no specific sources matched, use all (truncated)
         if not relevant:
             relevant = sources
 
-        wiki_index_text = "\n".join(
-            f"- [[{c.get('id', '')}]] — {c.get('description', '')}"
-            for c in concepts
-        )
-
-        article_content = call_llm(
+        content = await call_llm_async(
             config,
             system=SYSTEM_COMPILE.format(language=lang),
             user=PROMPT_WRITE_ARTICLE.format(
@@ -321,44 +317,54 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             ),
             max_tokens=4096,
         )
+        console.print(f"  [green]✓[/green] {title}")
+        return cid, title, desc, content
 
-        article_path = wiki_dir / "concepts" / f"{cid}.md"
-        article_path.write_text(article_content, encoding="utf-8")
+    results = asyncio.run(asyncio.gather(
+        *[_generate_article(i, c) for i, c in enumerate(concepts)]
+    ))
+
+    articles_summary = []
+    for cid, title, desc, content in results:
+        (wiki_dir / "concepts" / f"{cid}.md").write_text(content, encoding="utf-8")
         articles_summary.append(f"- [[{cid}]] ({title}): {desc}")
 
-    console.print(f"  [green]✓[/green] {len(concepts)} articles generated")
+    console.print(f"  {len(concepts)} articles generated")
 
-    # Step 3: Write _index.md
-    console.print("\n[bold]3/4[/bold] Generating index...")
-    index_content = call_llm(
-        config,
-        system=SYSTEM_COMPILE.format(language=lang),
-        user=PROMPT_WRITE_INDEX.format(
-            project_name=config.name,
-            articles_summary="\n".join(articles_summary),
-            language=lang,
-        ),
-        max_tokens=4096,
-    )
-    (wiki_dir / "_index.md").write_text(index_content, encoding="utf-8")
-    console.print("  [green]✓[/green] _index.md created")
-
-    # Step 4: Write _sources.md
-    console.print("\n[bold]4/4[/bold] Generating source catalog...")
+    # Step 3+4: Generate index and source catalog in parallel
+    console.print("\n[bold]3/4[/bold] Generating index + source catalog...")
     sources_list_text = "\n".join(
         f"- {name} ({len(content)} chars)" for name, content in sources.items()
     )
-    sources_content = call_llm(
-        config,
-        system=SYSTEM_COMPILE.format(language=lang),
-        user=PROMPT_WRITE_SOURCES.format(
-            sources_list=sources_list_text,
-            language=lang,
-        ),
-        max_tokens=4096,
-    )
+
+    async def _generate_meta():
+        idx, src = await asyncio.gather(
+            call_llm_async(
+                config,
+                system=SYSTEM_COMPILE.format(language=lang),
+                user=PROMPT_WRITE_INDEX.format(
+                    project_name=config.name,
+                    articles_summary="\n".join(articles_summary),
+                    language=lang,
+                ),
+                max_tokens=4096,
+            ),
+            call_llm_async(
+                config,
+                system=SYSTEM_COMPILE.format(language=lang),
+                user=PROMPT_WRITE_SOURCES.format(
+                    sources_list=sources_list_text,
+                    language=lang,
+                ),
+                max_tokens=4096,
+            ),
+        )
+        return idx, src
+
+    index_content, sources_content = asyncio.run(_generate_meta())
+    (wiki_dir / "_index.md").write_text(index_content, encoding="utf-8")
     (wiki_dir / "_sources.md").write_text(sources_content, encoding="utf-8")
-    console.print("  [green]✓[/green] _sources.md created")
+    console.print("  [green]✓[/green] _index.md + _sources.md created")
 
     # Save state
     _save_compile_state(project_dir, sources)
