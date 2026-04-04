@@ -50,7 +50,8 @@ Return a JSON object with this structure:
   ]
 }}
 
-Extract up to {max_concepts} concepts. Focus on the most important and cross-referenced ones.
+Extract EXACTLY {max_concepts} concepts — no more, no less.
+Only include the highest-level, most important concepts. Merge related sub-topics into broader concepts.
 Keep descriptions SHORT (under 15 words each).
 Return ONLY valid JSON, no markdown fences, no commentary.
 """
@@ -233,6 +234,9 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     lang = config.compile.language
     sources_text = _truncate_sources(sources)
 
+    # Scale concepts to source count: ~5 per source, capped by config
+    max_concepts = min(config.compile.max_concepts, max(5, len(sources) * 5))
+
     # Step 1: Extract concepts
     console.print("\n[bold]1/4[/bold] Extracting concepts...")
     concepts_raw = call_llm(
@@ -241,7 +245,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         user=PROMPT_EXTRACT_CONCEPTS.format(
             project_name=config.name,
             sources_text=sources_text,
-            max_concepts=config.compile.max_concepts,
+            max_concepts=max_concepts,
         ),
         max_tokens=16384,
     )
@@ -258,7 +262,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             user=PROMPT_EXTRACT_CONCEPTS.format(
                 project_name=config.name,
                 sources_text=sources_text,
-                max_concepts=config.compile.max_concepts,
+                max_concepts=max_concepts,
             ),
             max_tokens=16384,
         )
