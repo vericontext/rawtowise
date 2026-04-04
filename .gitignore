@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.rtw/
+raw/
+wiki/
+output/
+*.egg-link
+.claude/settings.local.json
+IDEA.md
+llm-wiki.md

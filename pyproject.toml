@@ -1,0 +1,26 @@
+[project]
+name = "rawtowise"
+version = "0.1.0"
+description = "LLM Knowledge Compiler — raw documents → structured wiki"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.0",
+    "anthropic>=0.40",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "markitdown>=0.1",
+]
+
+[project.scripts]
+rtw = "rawtowise.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rawtowise"]
+
+[tool.ruff]
+line-length = 100
