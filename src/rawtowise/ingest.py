@@ -34,6 +34,81 @@ def _extract_title_from_md(content: str) -> str:
     return "untitled"
 
 
+def _clean_web_markdown(content: str) -> str:
+    """Strip web boilerplate from Jina Reader markdown output.
+
+    Removes navigation menus, image refs, checkbox UI artifacts,
+    and Wikipedia footer sections to keep only article content.
+    """
+    lines = content.splitlines()
+
+    # 1. Find actual content start
+    # Strategy: find "Markdown Content:" marker, then keep the # Title line
+    # but skip everything until the first real ## section heading
+    title_line = ""
+    mc_index = -1
+    for i, line in enumerate(lines):
+        if line.strip() == "Markdown Content:":
+            mc_index = i
+            break
+
+    if mc_index >= 0:
+        # Find the title line (first # heading after marker)
+        for i in range(mc_index + 1, min(mc_index + 5, len(lines))):
+            if lines[i].startswith("# "):
+                title_line = lines[i]
+                break
+        # Find first real ## section (skip "## Contents" and nav)
+        start = mc_index + 1
+        skip_headings = {"contents", "search", "personal tools", "navigation",
+                         "contribute", "appearance", "general", "languages"}
+        for i in range(mc_index + 1, len(lines)):
+            if lines[i].startswith("## "):
+                heading_text = lines[i].lstrip("# ").strip().lower()
+                if heading_text not in skip_headings:
+                    start = i
+                    break
+        lines = lines[start:]
+        if title_line:
+            lines.insert(0, title_line)
+            lines.insert(1, "")
+    else:
+        # Fallback: skip to first ## heading
+        for i, line in enumerate(lines):
+            if re.match(r"^##\s+\S", line):
+                lines = lines[i:]
+                break
+
+    # 2. Truncate at terminal sections (References, External links)
+    end = len(lines)
+    for i, line in enumerate(lines):
+        if re.match(r"^##\s+(References|External [Ll]inks|Notes|Citations)\s*$", line):
+            end = i
+            break
+    lines = lines[:end]
+
+    cleaned = []
+    for line in lines:
+        # 3. Remove image references
+        if re.match(r"^\s*!\[", line):
+            continue
+        # 4. Remove standalone link-only lines (nav artifacts)
+        if re.match(r"^\s*\[.*?\]\(.*?\)\s*$", line) and not line.strip().startswith("*"):
+            continue
+        # 5. Clean checkbox markup (Wikipedia UI artifacts)
+        line = re.sub(r"^(\s*)-\s*\[[ x]\]\s*", r"\1- ", line)
+        # 6. Remove [edit] link lines and inline [edit] refs
+        if re.match(r"^\s*\[+\s*edit\s*\]", line):
+            continue
+        line = re.sub(r"\s*\[+\s*edit\s*\]+\s*(\([^)]*\))?\s*\]?", "", line)
+        cleaned.append(line)
+
+    result = "\n".join(cleaned)
+    # 6. Collapse 3+ consecutive blank lines to 2
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
 def _encode_url(url: str) -> str:
     """Encode URL path segments to handle special characters like parentheses."""
     parsed = urlparse(url)
@@ -90,6 +165,9 @@ def _ingest_url(url: str, raw_dir: Path) -> list[Path]:
     except Exception as e:
         console.print(f"  [red]URL fetch failed: {e}[/red]")
         return []
+
+    # Clean web boilerplate (nav menus, image refs, etc.)
+    content = _clean_web_markdown(content)
 
     # Add source metadata header
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")

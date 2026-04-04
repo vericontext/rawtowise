@@ -148,19 +148,28 @@ def _save_compile_state(project_dir: Path, sources: dict[str, str]):
     (rtw_dir / "compile-state.json").write_text(json.dumps(state, indent=2))
 
 
-def _truncate_sources(sources: dict[str, str], max_chars: int = 150_000) -> str:
-    """Combine sources into a single text block, truncating if needed."""
+def _truncate_sources(
+    sources: dict[str, str],
+    max_chars: int = 150_000,
+    max_per_source: int = 50_000,
+) -> str:
+    """Combine sources into a single text block with fair per-source caps."""
     parts = []
     total = 0
     for name, content in sources.items():
         header = f"\n--- SOURCE: {name} ---\n"
-        if total + len(header) + len(content) > max_chars:
+        # Cap each source individually
+        capped = content[:max_per_source]
+        if len(content) > max_per_source:
+            capped += "\n[...truncated...]"
+        # Check total budget
+        if total + len(header) + len(capped) > max_chars:
             remaining = max_chars - total - len(header) - 100
             if remaining > 500:
-                parts.append(header + content[:remaining] + "\n[...truncated...]")
+                parts.append(header + capped[:remaining] + "\n[...truncated...]")
             break
-        parts.append(header + content)
-        total += len(header) + len(content)
+        parts.append(header + capped)
+        total += len(header) + len(capped)
     return "\n".join(parts)
 
 
@@ -242,7 +251,15 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         concepts = concepts_data.get("concepts", []) if concepts_data else []
 
     if not concepts:
-        console.print("[red]Failed to extract concepts.[/red]")
+        # Save debug info
+        debug_dir = project_dir / ".rtw" / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        (debug_dir / "concepts-raw-response.txt").write_text(concepts_raw, encoding="utf-8")
+        (debug_dir / "concepts-prompt-sources.txt").write_text(sources_text[:50_000], encoding="utf-8")
+        preview = concepts_raw[:300].replace("\n", " ")
+        console.print(f"[red]Failed to extract concepts.[/red]")
+        console.print(f"[dim]LLM response ({len(concepts_raw)} chars): {preview}...[/dim]")
+        console.print(f"[dim]Debug saved to .rtw/debug/[/dim]")
         return
 
     console.print(f"  [green]✓[/green] {len(concepts)} concepts extracted")
