@@ -13,7 +13,7 @@
 
 ---
 
-https://github.com/user-attachments/assets/1ba77c2f-561e-4ba9-b683-d530af7b2c40
+https://github.com/user-attachments/assets/2dd7bb29-8f4f-44ff-a5c4-f303b055e7ce
 
 ```
 raw/ (papers, articles, URLs)
