@@ -167,6 +167,18 @@ RAWTOWISE_LLM_PROVIDER=claude-code rtw query "..."
 RAWTOWISE_LLM_PROVIDER=anthropic rtw lint
 ```
 
+## Agent-Assisted Development
+
+This repository is set up for both Codex and Claude Code:
+
+- `AGENTS.md` — shared repository instructions for Codex, Claude Code, and other agents
+- `CLAUDE.md` — Claude Code entry point that delegates to `AGENTS.md`
+- `.codex/config.toml` — project-scoped Codex defaults and hook enablement
+- `.codex/hooks.json` + `.codex/hooks/` — Codex hooks for version sync, patch auto-bump on `git commit`, and destructive command guards
+- `.claude/` — Claude Code hooks for the same version sync / auto-bump workflow
+
+Keep personal choices such as model, auth method, sandbox, approval policy, telemetry, and MCP servers in your user-level Codex or Claude Code config. Project hooks may require starting a new trusted Codex session before they load.
+
 ## Viewing the Wiki
 
 The compiled wiki is plain markdown with `[[wiki-links]]`. Best viewed with:
@@ -177,16 +189,16 @@ The compiled wiki is plain markdown with `[[wiki-links]]`. Best viewed with:
 
 ## Cost
 
-RawToWise can use your logged-in Codex or Claude Code CLI session. If you set `llm.provider: anthropic` or `ANTHROPIC_API_KEY`, RawToWise calls the Anthropic API directly and API billing applies.
+RawToWise can use your logged-in Codex or Claude Code CLI session. Those backends follow your CLI account's subscription, rate limit, or usage policy. If you set `llm.provider: anthropic` or `ANTHROPIC_API_KEY`, RawToWise calls the Anthropic API directly and API billing applies.
 
 | Operation | Anthropic API estimate |
 |-----------|----------|
-| Ingest 1 article | ~$0.02 |
+| Ingest URL/file | No LLM API call |
 | Compile 5 sources | ~$1-2 |
 | Single query | ~$0.05-0.15 |
 | Lint | ~$0.50 |
 
-Use `rtw compile --dry-run` to estimate before compiling.
+Use `rtw compile --dry-run` to estimate compile input size before compiling. Cost estimates are only meaningful for direct API backends.
 
 ## Roadmap
 
