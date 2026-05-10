@@ -55,7 +55,7 @@ git clone https://github.com/vericontext/rawtowise.git && cd rawtowise && pip in
 
 </details>
 
-Requires an [Anthropic API key](https://console.anthropic.com/settings/keys). The `rtw init` command will prompt you to set it up.
+RawToWise can run through your logged-in **Codex** or **Claude Code** CLI session, so a separate API key is not required for local use. Direct Anthropic API usage is still supported with `ANTHROPIC_API_KEY`.
 
 ## Quick Start
 
@@ -81,19 +81,19 @@ rtw lint
 
 ## How It Works
 
-**Ingest** — Fetch URLs (via [Jina Reader](https://jina.ai/reader/)), copy local files, and clean web boilerplate. Sources are stored in `raw/`.
+**Ingest** — Fetch URLs (via [Jina Reader](https://jina.ai/reader/)), copy local files into `raw/`, and convert supported document formats to Markdown with [MarkItDown](https://github.com/microsoft/markitdown). Raw sources stay intact; processed Markdown and source metadata live under `.rtw/`.
 
-**Compile** — LLM extracts key concepts from all sources, generates interlinked wiki articles with `[[backlinks]]` and `[source: filename]` citations, and builds an index. Articles are generated in parallel for speed.
+**Compile** — LLM extracts key concepts from all compilable sources, generates interlinked wiki articles with `[[backlinks]]` and `[source: source_id:Lx-Ly]` citations, and builds an index. Articles are generated in parallel for speed. Incremental compiles use source hashes to skip unchanged inputs.
 
 **Query** — LLM reads the wiki index, finds relevant articles, and synthesizes an answer. Answers stream to the terminal and are saved to `output/` for future reference.
 
-**Lint** — LLM audits the wiki for contradictions, coverage gaps, stale information, and suggests new questions to explore.
+**Lint** — LLM audits the wiki for contradictions, coverage gaps, stale information, and suggested explorations. RawToWise also checks dangling wikilinks, uncited concept pages, orphan pages, and stale source hashes.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `rtw init` | Initialize a new project (creates dirs + config, prompts for API key) |
+| `rtw init` | Initialize a new project (creates dirs + config, detects LLM backend) |
 | `rtw ingest <source>` | Ingest URL, file, or directory into `raw/` |
 | `rtw compile` | Compile sources into wiki (incremental by default) |
 | `rtw compile --full` | Full recompile from scratch |
@@ -109,17 +109,23 @@ rtw lint
 ```
 my-research/
 ├── rtw.yaml              # Configuration
-├── .env                  # API key (auto-created by rtw init, gitignored)
+├── .env                  # Optional API key overrides (gitignored)
 ├── raw/                  # Raw sources — you add files here
 │   ├── articles/         #   Web articles (auto-sorted)
-│   └── papers/           #   PDFs (auto-sorted)
+│   ├── papers/           #   PDFs (auto-sorted)
+│   ├── documents/        #   Office/ePub docs
+│   └── data/             #   CSV/JSON/XML/Excel files
 ├── wiki/                 # LLM-generated wiki — don't edit manually
+│   ├── AGENTS.md         #   Wiki schema + maintenance rules
 │   ├── _index.md         #   Master index
 │   ├── _sources.md       #   Source catalog
+│   ├── log.md            #   Append-only operation log
 │   └── concepts/         #   Concept articles with [[backlinks]]
 ├── output/               # Query results
 │   └── queries/          #   Saved answers
-└── .rtw/                 # Internal state (compile state, debug logs)
+└── .rtw/                 # Internal state (manifest, processed markdown, debug logs)
+    ├── sources.json      #   Source manifest with hashes/provenance
+    └── processed/        #   Markdown converted from PDFs/Office/etc.
 ```
 
 ## Configuration
@@ -131,14 +137,34 @@ version: 1
 name: "My Research"
 
 llm:
+  provider: auto                   # auto, anthropic, codex, or claude-code
   compile: claude-sonnet-4-6      # Fast model for compilation
   query: claude-sonnet-4-6        # Query answering
   lint: claude-haiku-4-5-20251001 # Economical model for health checks
+  codex_model: ""                 # Optional Codex model override
+  claude_code_model: ""           # Optional Claude Code model override
+  timeout_seconds: 600
 
 compile:
   strategy: incremental
   max_concepts: 200
   language: en                    # Wiki language
+```
+
+`llm.provider: auto` resolves in this order:
+
+1. Active Codex session + `codex` CLI
+2. Active Claude Code session + `claude` CLI
+3. `ANTHROPIC_API_KEY`
+4. Installed Claude Code CLI
+5. Installed Codex CLI
+
+You can force a backend per run:
+
+```bash
+RAWTOWISE_LLM_PROVIDER=codex rtw compile
+RAWTOWISE_LLM_PROVIDER=claude-code rtw query "..."
+RAWTOWISE_LLM_PROVIDER=anthropic rtw lint
 ```
 
 ## Viewing the Wiki
@@ -151,9 +177,9 @@ The compiled wiki is plain markdown with `[[wiki-links]]`. Best viewed with:
 
 ## Cost
 
-RawToWise uses the Anthropic API. You pay only for what you use.
+RawToWise can use your logged-in Codex or Claude Code CLI session. If you set `llm.provider: anthropic` or `ANTHROPIC_API_KEY`, RawToWise calls the Anthropic API directly and API billing applies.
 
-| Operation | Estimate |
+| Operation | Anthropic API estimate |
 |-----------|----------|
 | Ingest 1 article | ~$0.02 |
 | Compile 5 sources | ~$1-2 |
@@ -166,10 +192,10 @@ Use `rtw compile --dry-run` to estimate before compiling.
 
 See [open issues labeled `roadmap`](https://github.com/vericontext/rawtowise/labels/roadmap) for planned features, including:
 
-- PDF ingestion
 - YouTube transcript support
-- True incremental compile
-- Multi-LLM support (OpenAI, Ollama)
+- Review/approval mode for generated wiki edits
+- Hybrid local search (BM25/vector/rerank)
+- Ollama/local model support
 - Obsidian plugin
 - MCP server for AI agents
 

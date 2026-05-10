@@ -12,9 +12,13 @@ from dotenv import load_dotenv
 
 @dataclass
 class LLMConfig:
+    provider: str = "auto"
     compile: str = "claude-sonnet-4-6"
     query: str = "claude-sonnet-4-6"
     lint: str = "claude-haiku-4-5-20251001"
+    codex_model: str = ""
+    claude_code_model: str = ""
+    timeout_seconds: int = 600
 
 
 @dataclass
@@ -43,10 +47,10 @@ class Config:
         if not key:
             raise RuntimeError(
                 "ANTHROPIC_API_KEY not found.\n"
-                "Set it via:\n"
+                "Either set llm.provider to codex/claude-code for a logged-in agent CLI, "
+                "or set an Anthropic API key via:\n"
                 "  1. .env file:  echo 'ANTHROPIC_API_KEY=sk-...' > .env\n"
-                "  2. Environment: export ANTHROPIC_API_KEY=sk-...\n"
-                "  3. rtw init:   will prompt you to set it up"
+                "  2. Environment: export ANTHROPIC_API_KEY=sk-..."
             )
         return key
 
@@ -66,9 +70,13 @@ def load_config(project_dir: Path) -> Config:
 
     llm_raw = raw.get("llm", {})
     llm = LLMConfig(
+        provider=llm_raw.get("provider", LLMConfig.provider),
         compile=llm_raw.get("compile", LLMConfig.compile),
         query=llm_raw.get("query", LLMConfig.query),
         lint=llm_raw.get("lint", LLMConfig.lint),
+        codex_model=llm_raw.get("codex_model", LLMConfig.codex_model),
+        claude_code_model=llm_raw.get("claude_code_model", LLMConfig.claude_code_model),
+        timeout_seconds=llm_raw.get("timeout_seconds", LLMConfig.timeout_seconds),
     )
 
     compile_raw = raw.get("compile", {})
@@ -99,9 +107,19 @@ version: 1
 name: "My Research"
 
 llm:
+  # auto = use the active agent CLI when available:
+  #   Codex session -> codex exec
+  #   Claude Code session -> claude -p
+  #   otherwise Anthropic API if ANTHROPIC_API_KEY is set, then installed CLIs
+  # Explicit options: anthropic, codex, claude-code
+  provider: auto
   compile: claude-sonnet-4-6
   query: claude-sonnet-4-6
   lint: claude-haiku-4-5-20251001
+  # Optional model overrides for keyless CLI backends.
+  codex_model: ""
+  claude_code_model: ""
+  timeout_seconds: 600
 
 compile:
   strategy: incremental

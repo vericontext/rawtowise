@@ -10,6 +10,7 @@ from rich.table import Table
 
 from rawtowise import __version__
 from rawtowise.config import Config, default_yaml, load_config
+from rawtowise.sources import ensure_wiki_scaffold, load_manifest
 
 app = typer.Typer(
     name="rtw",
@@ -42,11 +43,20 @@ def init(
 ):
     """Initialize a new RawToWise project."""
     import os
+    import shutil
 
     project_dir = _resolve_project(project)
 
     # Create directories
-    for d in ["raw/articles", "raw/papers", "wiki/concepts", "output/queries", ".rtw"]:
+    for d in [
+        "raw/articles",
+        "raw/papers",
+        "raw/data",
+        "raw/documents",
+        "wiki/concepts",
+        "output/queries",
+        ".rtw/processed/sources",
+    ]:
         (project_dir / d).mkdir(parents=True, exist_ok=True)
 
     # Write rtw.yaml
@@ -58,29 +68,29 @@ def init(
     else:
         console.print("[dim]rtw.yaml already exists[/dim]")
 
-    # API key setup
+    ensure_wiki_scaffold(project_dir, name)
+
+    # LLM backend setup
     env_path = project_dir / ".env"
     has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     has_env_file = env_path.exists() and "ANTHROPIC_API_KEY" in env_path.read_text()
+    has_codex = bool(shutil.which("codex"))
+    has_claude_code = bool(shutil.which("claude"))
 
-    if not has_key and not has_env_file:
-        console.print("\n[bold]API Key Setup[/bold]")
-        console.print("RawToWise requires an Anthropic API key.")
-        console.print("Get one at: [link]https://console.anthropic.com/settings/keys[/link]\n")
-        api_key = typer.prompt(
-            "ANTHROPIC_API_KEY (enter to skip)",
-            default="",
-            show_default=False,
-            hide_input=True,
-        )
-        if api_key.strip():
-            env_path.write_text(f"ANTHROPIC_API_KEY={api_key.strip()}\n")
-            console.print("[green]✓[/green] Saved to .env")
-            console.print("[dim]Tip: .env is in .gitignore — your key stays local[/dim]")
-        else:
-            console.print("[dim]Skipped. Set it later: echo 'ANTHROPIC_API_KEY=sk-...' > .env[/dim]")
+    console.print("\n[bold]LLM Backend[/bold]")
+    if os.environ.get("CODEX_THREAD_ID") and has_codex:
+        console.print("[green]✓[/green] Codex CLI session detected; RawToWise can use `codex exec`")
+    elif os.environ.get("CLAUDE_CODE_SSE_PORT") and has_claude_code:
+        console.print("[green]✓[/green] Claude Code session detected; RawToWise can use `claude -p`")
+    elif has_key or has_env_file:
+        console.print("[green]✓[/green] Anthropic API key configured")
+    elif has_claude_code:
+        console.print("[green]✓[/green] Claude Code CLI found; run `/login` in Claude Code if needed")
+    elif has_codex:
+        console.print("[green]✓[/green] Codex CLI found; run Codex login if needed")
     else:
-        console.print("[green]✓[/green] API key configured")
+        console.print("[yellow]No LLM backend detected.[/yellow]")
+        console.print("Use Codex, Claude Code, or set ANTHROPIC_API_KEY for direct API calls.")
 
     console.print(f"\n[bold green]Project initialized![/bold green] ({project_dir})")
     console.print("\nNext steps:")
@@ -191,6 +201,16 @@ def stats(
 
     raw_files = list(raw_dir.rglob("*")) if raw_dir.exists() else []
     raw_files = [f for f in raw_files if f.is_file()]
+    manifest = load_manifest(project_dir)
+    manifest_sources = manifest.get("sources", {})
+    processed_sources = [
+        s for s in manifest_sources.values()
+        if s.get("processed_path") and s.get("status") == "ready"
+    ]
+    failed_sources = [
+        s for s in manifest_sources.values()
+        if s.get("status") != "ready"
+    ]
 
     wiki_files = list(wiki_dir.rglob("*.md")) if wiki_dir.exists() else []
     wiki_words = 0
@@ -207,6 +227,9 @@ def stats(
     table.add_column("Count", justify="right")
 
     table.add_row("Sources (raw/)", str(len(raw_files)))
+    table.add_row("Sources (manifest)", str(len(manifest_sources)))
+    table.add_row("Processed markdown", str(len(processed_sources)))
+    table.add_row("Failed sources", str(len(failed_sources)))
     table.add_row("Wiki articles (wiki/)", str(len(wiki_files)))
     table.add_row("Wiki total words", f"{wiki_words:,}")
     table.add_row("Query outputs (output/)", str(len(query_files)))

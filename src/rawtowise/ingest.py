@@ -5,22 +5,48 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
 from rich.console import Console
 
+from rawtowise.sources import (
+    append_log,
+    make_source_id,
+    processed_source_path,
+    rel_path,
+    sha256_file,
+    slugify,
+    source_display_name,
+    upsert_source,
+    utc_date,
+)
+
 console = Console()
+
+NATIVE_TEXT_SUFFIXES = {".md", ".txt"}
+CONVERTIBLE_SUFFIXES = {
+    ".pdf",
+    ".html",
+    ".htm",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".json",
+    ".xml",
+    ".epub",
+}
+SUPPORTED_SUFFIXES = NATIVE_TEXT_SUFFIXES | CONVERTIBLE_SUFFIXES
 
 
 def _slugify(text: str) -> str:
     """Convert text to a filesystem-safe slug."""
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_]+", "-", text)
-    return text[:80] or "untitled"
+    return slugify(text)
 
 
 def _extract_title_from_md(content: str) -> str:
@@ -144,23 +170,24 @@ def ingest_source(source: str, project_dir: Path) -> list[Path]:
     saved: list[Path] = []
 
     if _is_url(source):
-        saved.extend(_ingest_url(source, raw_dir))
+        saved.extend(_ingest_url(source, project_dir))
     else:
         source_path = Path(source).expanduser().resolve()
         if source_path.is_dir():
             for f in sorted(source_path.rglob("*")):
-                if f.is_file() and f.suffix in (".md", ".txt", ".pdf", ".html"):
-                    saved.extend(_ingest_file(f, raw_dir))
+                if f.is_file() and f.suffix.lower() in SUPPORTED_SUFFIXES:
+                    saved.extend(_ingest_file(f, project_dir))
         elif source_path.is_file():
-            saved.extend(_ingest_file(source_path, raw_dir))
+            saved.extend(_ingest_file(source_path, project_dir))
         else:
             console.print(f"[red]Source not found: {source}[/red]")
 
     return saved
 
 
-def _ingest_url(url: str, raw_dir: Path) -> list[Path]:
+def _ingest_url(url: str, project_dir: Path) -> list[Path]:
     """Fetch URL and save as markdown."""
+    raw_dir = project_dir / "raw"
     console.print(f"  [dim]Fetching:[/dim] {url}")
     try:
         content, title = _fetch_url_as_markdown(url)
@@ -172,7 +199,7 @@ def _ingest_url(url: str, raw_dir: Path) -> list[Path]:
     content = _clean_web_markdown(content)
 
     # Add source metadata header
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = utc_date()
     header = f"---\nsource: {url}\ningested: {now}\n---\n\n"
 
     slug = _slugify(title)
@@ -185,20 +212,45 @@ def _ingest_url(url: str, raw_dir: Path) -> list[Path]:
         dest = dest.with_stem(f"{slug}-{h}")
 
     dest.write_text(header + content, encoding="utf-8")
+
+    file_hash = sha256_file(dest)
+    source_id = make_source_id(title, url)
+    record = upsert_source(project_dir, {
+        "id": source_id,
+        "title": title,
+        "kind": "url",
+        "source": url,
+        "raw_path": rel_path(project_dir, dest),
+        "processed_path": None,
+        "sha256": file_hash,
+        "processed_sha256": None,
+        "parser": "jina-reader",
+        "status": "ready",
+        "content_type": "markdown",
+    })
+    append_log(
+        project_dir,
+        "ingest",
+        source_display_name(record),
+        {"source_id": source_id, "raw": rel_path(project_dir, dest), "parser": "jina-reader"},
+    )
     console.print(f"  [green]✓[/green] {dest.relative_to(raw_dir.parent)}")
     return [dest]
 
 
-def _ingest_file(file_path: Path, raw_dir: Path) -> list[Path]:
+def _ingest_file(file_path: Path, project_dir: Path) -> list[Path]:
     """Copy a local file into raw/."""
+    raw_dir = project_dir / "raw"
     suffix = file_path.suffix.lower()
 
     if suffix == ".pdf":
         sub = "papers"
-    elif suffix in (".md", ".txt"):
+    elif suffix in (".md", ".txt", ".html", ".htm"):
         sub = "articles"
-    elif suffix == ".html":
-        sub = "articles"
+    elif suffix in {".csv", ".json", ".xml", ".xls", ".xlsx"}:
+        sub = "data"
+    elif suffix in {".doc", ".docx", ".ppt", ".pptx", ".epub"}:
+        sub = "documents"
     else:
         sub = "misc"
 
@@ -210,16 +262,94 @@ def _ingest_file(file_path: Path, raw_dir: Path) -> list[Path]:
         h = hashlib.md5(str(file_path).encode()).hexdigest()[:6]
         dest = dest.with_stem(f"{file_path.stem}-{h}")
 
-    if suffix in (".md", ".txt"):
+    if suffix in NATIVE_TEXT_SUFFIXES:
         content = file_path.read_text(encoding="utf-8")
         # Add frontmatter if missing
         if not content.startswith("---"):
-            now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            now = utc_date()
             header = f"---\nsource: {file_path}\ningested: {now}\n---\n\n"
             content = header + content
         dest.write_text(content, encoding="utf-8")
     else:
         shutil.copy2(file_path, dest)
 
+    raw_hash = sha256_file(dest)
+    title = file_path.stem
+    source_id = make_source_id(title, str(file_path))
+    processed: Path | None = None
+    processed_hash: str | None = None
+    parser = "native"
+    status = "ready"
+    error = None
+
+    if suffix in CONVERTIBLE_SUFFIXES:
+        parser = "markitdown"
+        processed = processed_source_path(project_dir, source_id)
+        processed.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            converted = _convert_file_to_markdown(dest)
+            processed.write_text(
+                _processed_header(file_path, source_id, parser) + converted,
+                encoding="utf-8",
+            )
+            processed_hash = sha256_file(processed)
+            title = _extract_title_from_md(converted) or title
+        except Exception as e:
+            processed = None
+            parser = "markitdown"
+            status = "failed"
+            error = str(e)
+            console.print(f"  [yellow]Conversion skipped:[/yellow] {file_path.name} ({e})")
+
+    record = upsert_source(project_dir, {
+        "id": source_id,
+        "title": title,
+        "kind": "file",
+        "source": str(file_path),
+        "raw_path": rel_path(project_dir, dest),
+        "processed_path": rel_path(project_dir, processed),
+        "sha256": raw_hash,
+        "processed_sha256": processed_hash,
+        "parser": parser,
+        "status": status,
+        "error": error,
+        "content_type": suffix.lstrip(".") or "file",
+    })
+    append_log(
+        project_dir,
+        "ingest",
+        source_display_name(record),
+        {
+            "source_id": source_id,
+            "raw": rel_path(project_dir, dest),
+            "processed": rel_path(project_dir, processed),
+            "parser": parser,
+            "status": status,
+        },
+    )
+
     console.print(f"  [green]✓[/green] {dest.relative_to(raw_dir.parent)}")
     return [dest]
+
+
+def _convert_file_to_markdown(file_path: Path) -> str:
+    """Convert a file to Markdown using MarkItDown."""
+    from markitdown import MarkItDown
+
+    result = MarkItDown().convert(file_path)
+    markdown = result.text_content or result.markdown
+    if not markdown.strip():
+        raise ValueError("conversion produced empty markdown")
+    return markdown.strip()
+
+
+def _processed_header(source_path: Path, source_id: str, parser: str) -> str:
+    now = utc_date()
+    return (
+        "---\n"
+        f"source: {source_path}\n"
+        f"source_id: {source_id}\n"
+        f"processed: {now}\n"
+        f"parser: {parser}\n"
+        "---\n\n"
+    )

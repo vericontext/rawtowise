@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,8 +13,30 @@ from rich.console import Console
 
 from rawtowise.config import Config
 from rawtowise.llm import call_llm, call_llm_async
+from rawtowise.sources import (
+    abs_path,
+    append_log,
+    ensure_wiki_scaffold,
+    load_manifest,
+    rel_path,
+    sha256_file,
+    sha256_text,
+)
 
 console = Console()
+
+
+@dataclass
+class SourceDoc:
+    """A source that can be sent to the compiler."""
+
+    id: str
+    content: str
+    path: str
+    digest: str
+    title: str
+    parser: str
+
 
 SYSTEM_COMPILE = """\
 You are a knowledge compiler. Your job is to read raw source documents and produce \
@@ -21,7 +44,7 @@ a structured wiki in markdown format.
 
 RULES:
 - Write in {language}.
-- Every claim MUST cite its source as [source: filename].
+- Every claim MUST cite its source as [source: source_id:Lx-Ly] when line numbers are available.
 - Create concept articles that synthesize information across multiple sources.
 - Use wiki-style backlinks: [[concept-name]] to link between articles.
 - Each article should have YAML frontmatter with: title, tags, sources, created date.
@@ -36,6 +59,10 @@ Below are the raw source documents for a knowledge base called "{project_name}".
 {sources_text}
 </sources>
 
+<existing_wiki_index>
+{wiki_index}
+</existing_wiki_index>
+
 TASK: Analyze all sources and extract the key concepts, entities, and themes.
 
 Return a JSON object with this structure:
@@ -45,14 +72,15 @@ Return a JSON object with this structure:
       "id": "concept-slug",
       "title": "Concept Title",
       "description": "One-line description",
-      "sources": ["source-file-1.md", "source-file-2.md"],
+      "sources": ["source-id-1", "source-id-2"],
       "related": ["other-concept-slug"]
     }}
   ]
 }}
 
-Extract EXACTLY {max_concepts} concepts — no more, no less.
+Extract up to {max_concepts} concepts.
 Only include the highest-level, most important concepts. Merge related sub-topics into broader concepts.
+Prefer existing concept ids when the source updates a topic already listed in the wiki index.
 Keep descriptions SHORT (under 15 words each).
 Return ONLY valid JSON, no markdown fences, no commentary.
 """
@@ -70,9 +98,9 @@ Description: {concept_desc}
 </existing_wiki_index>
 
 Write a comprehensive wiki article in markdown. Requirements:
-- YAML frontmatter with: title, tags (list), sources (list of filenames), created (date)
+- YAML frontmatter with: title, tags (list), sources (list of source ids), created (date)
 - Use ## and ### headings to structure the content
-- Cite sources as [source: filename] for every factual claim
+- Cite sources as [source: source_id:Lx-Ly] for every factual claim when line numbers are available
 - Use [[concept-name]] backlinks to link to related concepts in the wiki
 - Write in {language}
 - Be thorough but concise
@@ -105,7 +133,7 @@ Here are all the source documents in this knowledge base:
 </sources>
 
 Generate _sources.md — a catalog of all source documents. For each source:
-- Filename
+- Source id and filename/path
 - Source URL or path (from frontmatter if available)
 - Ingested date
 - Brief description (1-2 sentences)
@@ -115,21 +143,71 @@ Write in {language}. Output ONLY the markdown content.
 """
 
 
-def _read_raw_sources(project_dir: Path) -> dict[str, str]:
-    """Read all raw source files and return {filename: content}."""
+def _read_compilable_sources(project_dir: Path) -> dict[str, SourceDoc]:
+    """Read text sources and processed markdown sources for compilation."""
     raw_dir = project_dir / "raw"
-    if not raw_dir.exists():
-        return {}
+    docs: dict[str, SourceDoc] = {}
 
-    sources = {}
-    for f in sorted(raw_dir.rglob("*")):
-        if f.is_file() and f.suffix in (".md", ".txt"):
-            rel = f.relative_to(raw_dir)
+    manifest = load_manifest(project_dir)
+    manifest_sources = manifest.get("sources", {})
+    represented_paths: set[str] = set()
+
+    for source_id, record in sorted(manifest_sources.items()):
+        if record.get("status") != "ready":
+            continue
+
+        manifest_path = record.get("processed_path") or record.get("raw_path")
+        path = abs_path(project_dir, manifest_path)
+        if not path or not path.exists() or path.suffix.lower() not in (".md", ".txt"):
+            continue
+
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        path_key = rel_path(project_dir, path) or str(path)
+        represented_paths.add(path_key)
+        docs[source_id] = SourceDoc(
+            id=source_id,
+            content=content,
+            path=path_key,
+            digest=sha256_file(path),
+            title=str(record.get("title") or source_id),
+            parser=str(record.get("parser") or "unknown"),
+        )
+
+    # Backward compatibility: projects created before sources.json still compile.
+    if raw_dir.exists():
+        for f in sorted(raw_dir.rglob("*")):
+            if not f.is_file() or f.suffix.lower() not in (".md", ".txt"):
+                continue
+            path_key = rel_path(project_dir, f) or str(f)
+            if path_key in represented_paths:
+                continue
             try:
-                sources[str(rel)] = f.read_text(encoding="utf-8")
+                content = f.read_text(encoding="utf-8")
             except Exception:
                 continue
-    return sources
+            source_id = f.relative_to(raw_dir).as_posix()
+            docs[source_id] = SourceDoc(
+                id=source_id,
+                content=content,
+                path=path_key,
+                digest=sha256_text(content),
+                title=f.stem,
+                parser="legacy-raw",
+            )
+
+    return docs
+
+
+def _read_raw_sources(project_dir: Path) -> dict[str, str]:
+    """Read all compilable source files and return {source_id: content}."""
+    return {
+        source_id: doc.content
+        for source_id, doc in _read_compilable_sources(project_dir).items()
+    }
 
 
 def _load_compile_state(project_dir: Path) -> dict:
@@ -140,15 +218,35 @@ def _load_compile_state(project_dir: Path) -> dict:
     return {"compiled_files": [], "last_compile": None}
 
 
-def _save_compile_state(project_dir: Path, sources: dict[str, str]):
+def _save_compile_state(project_dir: Path, sources: dict[str, SourceDoc]):
     """Save compile state."""
     rtw_dir = project_dir / ".rtw"
     rtw_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "compiled_files": list(sources.keys()),
+        "source_hashes": {source_id: doc.digest for source_id, doc in sources.items()},
         "last_compile": datetime.now(timezone.utc).isoformat(),
     }
     (rtw_dir / "compile-state.json").write_text(json.dumps(state, indent=2))
+
+
+def _source_changes(prev_state: dict, sources: dict[str, SourceDoc]) -> tuple[set[str], set[str], set[str]]:
+    """Return new, changed, and deleted source ids."""
+    prev_hashes = prev_state.get("source_hashes") or {
+        name: None for name in prev_state.get("compiled_files", [])
+    }
+    curr_hashes = {source_id: doc.digest for source_id, doc in sources.items()}
+
+    prev_ids = set(prev_hashes)
+    curr_ids = set(curr_hashes)
+    new_ids = curr_ids - prev_ids
+    deleted_ids = prev_ids - curr_ids
+    changed_ids = {
+        source_id
+        for source_id in curr_ids & prev_ids
+        if prev_hashes.get(source_id) != curr_hashes.get(source_id)
+    }
+    return new_ids, changed_ids, deleted_ids
 
 
 def _truncate_sources(
@@ -161,9 +259,10 @@ def _truncate_sources(
     total = 0
     for name, content in sources.items():
         header = f"\n--- SOURCE: {name} ---\n"
+        numbered = _with_line_numbers(content)
         # Cap each source individually
-        capped = content[:max_per_source]
-        if len(content) > max_per_source:
+        capped = numbered[:max_per_source]
+        if len(numbered) > max_per_source:
             capped += "\n[...truncated...]"
         # Check total budget
         if total + len(header) + len(capped) > max_chars:
@@ -174,6 +273,14 @@ def _truncate_sources(
         parts.append(header + capped)
         total += len(header) + len(capped)
     return "\n".join(parts)
+
+
+def _with_line_numbers(content: str) -> str:
+    """Prefix source lines so the LLM can produce location-aware citations."""
+    return "\n".join(
+        f"L{i:04d}: {line}"
+        for i, line in enumerate(content.splitlines(), start=1)
+    )
 
 
 def _extract_json(text: str) -> dict | None:
@@ -215,37 +322,96 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+def _read_existing_index(project_dir: Path) -> str:
+    index_path = project_dir / "wiki" / "_index.md"
+    if index_path.exists():
+        return index_path.read_text(encoding="utf-8")
+    return ""
+
+
+def _article_summaries(wiki_dir: Path, generated: list[tuple[str, str, str, str]]) -> list[str]:
+    """Summarize generated and existing concept pages for index generation."""
+    summaries_by_slug: dict[str, str] = {}
+    for cid, title, desc, _content in generated:
+        summaries_by_slug[cid] = f"- [[{cid}]] ({title}): {desc}"
+
+    concepts_dir = wiki_dir / "concepts"
+    if concepts_dir.exists():
+        for path in sorted(concepts_dir.glob("*.md")):
+            slug = path.stem
+            if slug in summaries_by_slug:
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            title = _extract_article_title(content) or slug
+            summaries_by_slug[slug] = f"- [[{slug}]] ({title}): existing concept page"
+
+    return [summaries_by_slug[k] for k in sorted(summaries_by_slug)]
+
+
+def _extract_article_title(content: str) -> str | None:
+    """Best-effort title extraction from frontmatter or headings."""
+    match = re.search(r"^title:\s*[\"']?(.+?)[\"']?\s*$", content, re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+    for line in content.splitlines():
+        if line.startswith("# "):
+            return line.lstrip("# ").strip()
+    return None
+
+
+def _sources_catalog_text(sources: dict[str, SourceDoc]) -> str:
+    """Build source catalog input for _sources.md generation."""
+    lines = []
+    for source_id, doc in sorted(sources.items()):
+        lines.append(
+            f"- {source_id}: title={doc.title}; path={doc.path}; "
+            f"parser={doc.parser}; chars={len(doc.content)}; sha256={doc.digest[:12]}"
+        )
+    return "\n".join(lines)
+
+
 def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     """Compile raw sources into a structured wiki."""
-    sources = _read_raw_sources(project_dir)
-    if not sources:
+    ensure_wiki_scaffold(project_dir, config.name)
+
+    source_docs = _read_compilable_sources(project_dir)
+    if not source_docs:
         console.print("[yellow]No sources in raw/. Run `rtw ingest` to add sources.[/yellow]")
         return
 
     # Check for incremental
     prev_state = _load_compile_state(project_dir)
     prev_files = set(prev_state.get("compiled_files", []))
-    curr_files = set(sources.keys())
-    new_files = curr_files - prev_files
+    new_files, changed_files, deleted_files = _source_changes(prev_state, source_docs)
+    work_ids = set(source_docs) if full or not prev_files else new_files | changed_files
 
-    if not full and not new_files:
+    if not full and not work_ids and not deleted_files:
         console.print("[yellow]No new sources. Use --full to force a full recompile.[/yellow]")
         return
 
     wiki_dir = project_dir / "wiki"
-    wiki_dir.mkdir(parents=True, exist_ok=True)
-    (wiki_dir / "concepts").mkdir(exist_ok=True)
 
     if full or not prev_files:
-        console.print(f"  [dim]Full compile: {len(sources)} sources[/dim]")
+        console.print(f"  [dim]Full compile: {len(source_docs)} sources[/dim]")
     else:
-        console.print(f"  [dim]New sources: {len(new_files)} (total: {len(sources)})[/dim]")
+        console.print(
+            f"  [dim]Changed sources: {len(work_ids)} "
+            f"(new: {len(new_files)}, changed: {len(changed_files)}, total: {len(source_docs)})[/dim]"
+        )
 
     lang = config.compile.language
-    sources_text = _truncate_sources(sources)
+    sources = {source_id: doc.content for source_id, doc in source_docs.items()}
+    work_sources = {source_id: sources[source_id] for source_id in sorted(work_ids)}
+    if not work_sources:
+        work_sources = sources
+    sources_text = _truncate_sources(work_sources)
+    existing_index = _read_existing_index(project_dir)
 
-    # Scale concepts to source count: ~5 per source, capped by config
-    max_concepts = min(config.compile.max_concepts, max(5, len(sources) * 5))
+    # Scale concepts to source count: ~5 per changed source, capped by config
+    max_concepts = min(config.compile.max_concepts, max(5, len(work_sources) * 5))
 
     # Step 1: Extract concepts
     console.print("\n[bold]1/4[/bold] Extracting concepts...")
@@ -255,6 +421,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         user=PROMPT_EXTRACT_CONCEPTS.format(
             project_name=config.name,
             sources_text=sources_text,
+            wiki_index=existing_index,
             max_concepts=max_concepts,
         ),
         max_tokens=16384,
@@ -272,6 +439,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
             user=PROMPT_EXTRACT_CONCEPTS.format(
                 project_name=config.name,
                 sources_text=sources_text,
+                wiki_index=existing_index,
                 max_concepts=max_concepts,
             ),
             max_tokens=16384,
@@ -286,9 +454,9 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         (debug_dir / "concepts-raw-response.txt").write_text(concepts_raw, encoding="utf-8")
         (debug_dir / "concepts-prompt-sources.txt").write_text(sources_text[:50_000], encoding="utf-8")
         preview = concepts_raw[:300].replace("\n", " ")
-        console.print(f"[red]Failed to extract concepts.[/red]")
+        console.print("[red]Failed to extract concepts.[/red]")
         console.print(f"[dim]LLM response ({len(concepts_raw)} chars): {preview}...[/dim]")
-        console.print(f"[dim]Debug saved to .rtw/debug/[/dim]")
+        console.print("[dim]Debug saved to .rtw/debug/[/dim]")
         return
 
     console.print(f"  [green]✓[/green] {len(concepts)} concepts extracted")
@@ -300,6 +468,8 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
         f"- [[{c.get('id', '')}]] — {c.get('description', '')}"
         for c in concepts
     )
+    if existing_index:
+        wiki_index_text = existing_index + "\n\n" + wiki_index_text
 
     progress = Progress(
         SpinnerColumn(),
@@ -350,15 +520,14 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     articles_summary = []
     for cid, title, desc, content in results:
         (wiki_dir / "concepts" / f"{cid}.md").write_text(content, encoding="utf-8")
-        articles_summary.append(f"- [[{cid}]] ({title}): {desc}")
+        articles_summary.append((cid, title, desc, content))
 
     console.print(f"  [green]✓[/green] {len(concepts)} articles generated")
 
     # Step 3+4: Generate index and source catalog in parallel
     console.print("\n[bold]3/4[/bold] Generating index + source catalog...")
-    sources_list_text = "\n".join(
-        f"- {name} ({len(content)} chars)" for name, content in sources.items()
-    )
+    articles_summary_text = "\n".join(_article_summaries(wiki_dir, articles_summary))
+    sources_list_text = _sources_catalog_text(source_docs)
 
     async def _generate_meta():
         idx, src = await asyncio.gather(
@@ -367,7 +536,7 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
                 system=SYSTEM_COMPILE.format(language=lang),
                 user=PROMPT_WRITE_INDEX.format(
                     project_name=config.name,
-                    articles_summary="\n".join(articles_summary),
+                    articles_summary=articles_summary_text,
                     language=lang,
                 ),
                 max_tokens=4096,
@@ -390,5 +559,18 @@ def compile_wiki(project_dir: Path, config: Config, full: bool = False) -> None:
     console.print("  [green]✓[/green] _index.md + _sources.md created")
 
     # Save state
-    _save_compile_state(project_dir, sources)
+    _save_compile_state(project_dir, source_docs)
+    append_log(
+        project_dir,
+        "compile",
+        "wiki",
+        {
+            "sources": len(source_docs),
+            "new": len(new_files),
+            "changed": len(changed_files),
+            "deleted": len(deleted_files),
+            "articles_generated": len(concepts),
+            "mode": "full" if full else "incremental",
+        },
+    )
     console.print(f"\n[bold green]Compile complete![/bold green] {len(concepts) + 2} files in wiki/")

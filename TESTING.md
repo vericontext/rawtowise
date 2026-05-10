@@ -22,7 +22,14 @@ rtw version
 
 ```bash
 rtw init --name "Test KB"
-# → Creates rtw.yaml, directories, prompts for API key
+# → Creates rtw.yaml/directories and detects Codex, Claude Code, or Anthropic API
+```
+
+To force a keyless agent backend during tests:
+
+```bash
+RAWTOWISE_LLM_PROVIDER=codex rtw compile
+RAWTOWISE_LLM_PROVIDER=claude-code rtw query "What is this wiki about?"
 ```
 
 ## 3. Ingest Sources
@@ -37,9 +44,17 @@ rtw ingest https://en.wikipedia.org/wiki/Prompt_engineering
 
 > **Note:** Quote URLs containing parentheses to avoid shell parsing errors.
 
+Optional document conversion smoke test:
+
+```bash
+rtw ingest ./paper.pdf
+# → Copies original to raw/papers/ and writes converted Markdown to .rtw/processed/sources/
+```
+
 ```bash
 # Verify
 ls raw/articles/
+cat .rtw/sources.json
 rtw stats
 ```
 
@@ -57,6 +72,8 @@ rtw compile
 # Verify
 ls wiki/concepts/
 cat wiki/_index.md
+cat wiki/AGENTS.md
+cat wiki/log.md
 ```
 
 ## 5. Query
@@ -70,6 +87,7 @@ rtw query "Compare RAG vs fine-tuning" --format table
 
 # Check saved output
 ls output/queries/
+tail -20 wiki/log.md
 ```
 
 ## 6. Lint
@@ -85,7 +103,7 @@ rtw lint
 # Add another source
 rtw ingest "https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)"
 
-# Recompile (detects new source automatically)
+# Recompile (detects new or changed source hashes automatically)
 rtw compile
 
 # Or force full rebuild

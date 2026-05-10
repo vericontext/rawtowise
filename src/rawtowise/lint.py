@@ -12,6 +12,7 @@ from rich.panel import Panel
 
 from rawtowise.config import Config
 from rawtowise.llm import call_llm
+from rawtowise.sources import abs_path, append_log, load_manifest, rel_path, sha256_file
 
 console = Console()
 
@@ -101,6 +102,8 @@ def lint_wiki(
         console.print("[yellow]No wiki found. Run `rtw compile` first.[/yellow]")
         return None
 
+    structural_issues = _structural_issues(project_dir)
+
     # Read all wiki content
     wiki_parts = []
     for f in sorted(wiki_dir.rglob("*.md")):
@@ -146,8 +149,21 @@ def lint_wiki(
         console.print(result_raw)
         return None
 
+    if structural_issues:
+        report.setdefault("issues", [])
+        report["issues"] = structural_issues + report["issues"]
+        try:
+            base_score = int(report.get("score", 0))
+        except (TypeError, ValueError):
+            base_score = 0
+        report["score"] = max(0, base_score - min(20, len(structural_issues) * 2))
+
     # Display report
-    score = report.get("score", 0)
+    try:
+        score = int(report.get("score", 0))
+    except (TypeError, ValueError):
+        score = 0
+        report["score"] = score
     color = "green" if score >= 80 else "yellow" if score >= 60 else "red"
     console.print(Panel(
         f"[bold {color}]Health Score: {score}/100[/bold {color}]\n\n{report.get('summary', '')}",
@@ -178,4 +194,118 @@ def lint_wiki(
     report["timestamp"] = datetime.now(timezone.utc).isoformat()
     (rtw_dir / "lint-report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
+    append_log(
+        project_dir,
+        "lint",
+        "wiki health check",
+        {
+            "score": report.get("score"),
+            "issues": len(report.get("issues", [])),
+            "report": rel_path(project_dir, rtw_dir / "lint-report.json"),
+        },
+    )
+
     return report
+
+
+def _structural_issues(project_dir: Path) -> list[dict]:
+    """Find deterministic structural wiki problems before the LLM audit."""
+    wiki_dir = project_dir / "wiki"
+    issues: list[dict] = []
+    if not wiki_dir.exists():
+        return issues
+
+    wiki_files = sorted(wiki_dir.rglob("*.md"))
+    page_stems = {p.stem for p in wiki_files}
+    inbound: dict[str, int] = {p.stem: 0 for p in wiki_files}
+
+    for path in wiki_files:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        rel = path.relative_to(wiki_dir).as_posix()
+
+        if rel.startswith("concepts/") and "[source:" not in content:
+            issues.append({
+                "category": "gap",
+                "severity": "medium",
+                "description": f"{rel} has no source citations.",
+                "articles": [rel],
+                "suggestion": "Add source citations to factual claims.",
+            })
+
+        for target in re.findall(r"\[\[([^\]]+)\]\]", content):
+            slug = target.split("|", 1)[0].strip()
+            slug = Path(slug).stem
+            if slug in inbound:
+                inbound[slug] += 1
+            elif slug not in page_stems:
+                issues.append({
+                    "category": "gap",
+                    "severity": "low",
+                    "description": f"{rel} links to missing page [[{slug}]].",
+                    "articles": [rel],
+                    "suggestion": f"Create {slug}.md or update the wikilink.",
+                })
+
+    for path in wiki_files:
+        rel = path.relative_to(wiki_dir).as_posix()
+        if rel.startswith("concepts/") and inbound.get(path.stem, 0) == 0:
+            issues.append({
+                "category": "gap",
+                "severity": "low",
+                "description": f"{rel} has no inbound wikilinks.",
+                "articles": [rel],
+                "suggestion": "Add cross-references from related pages or the index.",
+            })
+
+    manifest = load_manifest(project_dir)
+    for source_id, record in sorted(manifest.get("sources", {}).items()):
+        raw_path = abs_path(project_dir, record.get("raw_path"))
+        processed_path = abs_path(project_dir, record.get("processed_path"))
+        check_path = processed_path or raw_path
+        if raw_path and not raw_path.exists():
+            issues.append({
+                "category": "stale",
+                "severity": "high",
+                "description": f"Raw source file for {source_id} is missing.",
+                "articles": ["_sources.md"],
+                "suggestion": "Re-ingest the source or remove the stale manifest record.",
+            })
+        if not check_path or not check_path.exists():
+            issues.append({
+                "category": "stale",
+                "severity": "high",
+                "description": f"Source {source_id} points to a missing file.",
+                "articles": ["_sources.md"],
+                "suggestion": "Re-ingest the source or remove the stale manifest record.",
+            })
+            continue
+
+        raw_expected = record.get("sha256")
+        if raw_path and raw_path.exists() and raw_expected and sha256_file(raw_path) != raw_expected:
+            issues.append({
+                "category": "stale",
+                "severity": "medium",
+                "description": f"Raw source {source_id} has changed since ingest.",
+                "articles": ["_sources.md"],
+                "suggestion": "Re-ingest the source so processed markdown and hashes stay aligned.",
+            })
+
+        processed_expected = record.get("processed_sha256")
+        if (
+            processed_path
+            and processed_path.exists()
+            and processed_expected
+            and sha256_file(processed_path) != processed_expected
+        ):
+            issues.append({
+                "category": "stale",
+                "severity": "medium",
+                "description": f"Processed source {source_id} has changed since ingest.",
+                "articles": ["_sources.md"],
+                "suggestion": "Run rtw compile to refresh affected wiki pages.",
+            })
+
+    return issues

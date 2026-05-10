@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
-from rich.markdown import Markdown
 
 from rawtowise.config import Config
 from rawtowise.llm import call_llm, stream_llm
+from rawtowise.sources import append_log, rel_path
 
 console = Console()
 
@@ -19,7 +19,7 @@ You are a research assistant that answers questions using a curated knowledge wi
 
 RULES:
 - Base your answers ONLY on the wiki content provided. If the wiki doesn't cover something, say so.
-- Cite sources using [source: filename] notation.
+- Cite sources using [source: source_id:location] notation when available.
 - Use [[concept-name]] to reference wiki articles.
 - Be thorough, analytical, and precise.
 - Write in {language}.
@@ -49,7 +49,7 @@ Here is the relevant wiki content:
 </wiki_content>
 
 Provide a comprehensive answer based on the wiki content.
-- Cite sources with [source: filename]
+- Cite sources with [source: source_id:location] when available
 - Reference wiki articles with [[concept-name]]
 - If the wiki doesn't have enough information, state what's missing
 - Write in {language}
@@ -197,9 +197,21 @@ def query_wiki(
 
     # File back
     should_file_back = file_back if file_back is not None else config.file_back
+    saved: Path | None = None
     if should_file_back:
         saved = _file_back_answer(project_dir, question, answer, fmt)
         if saved:
             console.print(f"\n[dim]Answer saved: {saved.relative_to(project_dir)}[/dim]")
+
+    append_log(
+        project_dir,
+        "query",
+        question[:80],
+        {
+            "format": fmt,
+            "deep": deep,
+            "saved": rel_path(project_dir, saved) if should_file_back and saved else None,
+        },
+    )
 
     return answer

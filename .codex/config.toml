@@ -1,0 +1,17 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Project-scoped Codex config for RawToWise.
+#
+# Repo instructions live in AGENTS.md. Keep user-specific choices such as model,
+# auth method, sandbox mode, approvals, telemetry, and MCP servers in
+# ~/.codex/config.toml unless the project has a clear shared requirement.
+
+# Allow the full AGENTS.md guide to be loaded if it grows over time.
+project_doc_max_bytes = 65536
+
+# If AGENTS.md is ever absent in a worktree, Claude's project guide can serve as
+# a fallback instruction source. When AGENTS.md exists, Codex uses it first.
+project_doc_fallback_filenames = ["CLAUDE.md"]
+
+[features]
+codex_hooks = true
