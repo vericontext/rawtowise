@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/2dd7bb29-8f4f-44ff-a5c4-f303b055e7ce
 ```
 raw/ (papers, articles, URLs)
   → rtw compile → wiki/ (structured .md with backlinks)
-                    → rtw query → answers accumulate in wiki
+                    → rtw query → answers saved in output/
                     → rtw lint  → detect contradictions, fill gaps
 ```
 
@@ -29,7 +29,7 @@ Inspired by [Andrej Karpathy's LLM knowledge base workflow](https://x.com/karpat
 | Problem | RawToWise |
 |---------|-----------|
 | RAG requires vector DB infra | **No vector DB** — LLM navigates via index + backlinks |
-| Chat answers disappear | **Exploration = accumulation** — every query enriches the wiki |
+| Chat answers disappear | **Exploration = accumulation** — every query can be saved and revisited |
 | PKM requires manual organizing | **Drop and forget** — put files in `raw/`, LLM handles the rest |
 | Vendor lock-in (NotebookLM, etc.) | **Plain markdown** — works in Obsidian, VSCode, or any editor |
 
@@ -72,7 +72,7 @@ rtw ingest ./my-articles/
 # 3. Compile into a wiki
 rtw compile
 
-# 4. Ask questions (answers stream in real-time)
+# 4. Ask questions
 rtw query "What are the key debates in this field?"
 
 # 5. Health check
@@ -85,7 +85,7 @@ rtw lint
 
 **Compile** — LLM extracts key concepts from all compilable sources, generates interlinked wiki articles with `[[backlinks]]` and `[source: source_id:Lx-Ly]` citations, and builds an index. Articles are generated in parallel for speed. Incremental compiles use source hashes to skip unchanged inputs.
 
-**Query** — LLM reads the wiki index, finds relevant articles, and synthesizes an answer. Answers stream to the terminal and are saved to `output/` for future reference.
+**Query** — LLM reads the wiki index, finds relevant articles, and synthesizes an answer. Answers are printed to the terminal and saved to `output/` for future reference; direct API backends stream when supported.
 
 **Lint** — LLM audits the wiki for contradictions, coverage gaps, stale information, and suggested explorations. RawToWise also checks dangling wikilinks, uncited concept pages, orphan pages, and stale source hashes.
 
@@ -97,8 +97,8 @@ rtw lint
 | `rtw ingest <source>` | Ingest URL, file, or directory into `raw/` |
 | `rtw compile` | Compile sources into wiki (incremental by default) |
 | `rtw compile --full` | Full recompile from scratch |
-| `rtw compile --dry-run` | Estimate token usage and cost |
-| `rtw query "question"` | Ask the wiki (streamed output) |
+| `rtw compile --dry-run` | Estimate compile input size and direct API cost |
+| `rtw query "question"` | Ask the wiki |
 | `rtw query "..." --format table` | Output as markdown table |
 | `rtw query "..." --deep` | Deep research mode (longer output) |
 | `rtw lint` | Run wiki health check |
